@@ -1,7 +1,9 @@
 from flight_search.search import search_flexible_dates
 from flight_search.recommendations import build_recommendation_summary
 
+from flight_search.providers.verification import verify_top_results_with_flightapi
 
+import os
 # ==========================================
 # SEARCH CONFIGURATION
 # ==========================================
@@ -138,6 +140,90 @@ if ranked_results:
             print(f"   Flight duration: {result['duration']} minutes")
 else:
     print("No priced flights found.")
+
+print()
+print("FLIGHTAPI.IO CROSS-CHECK")
+print("-" * 70)
+
+flightapi_key = os.getenv("FLIGHTAPI_API_KEY")
+
+if flightapi_key and ranked_results:
+    verifications = verify_top_results_with_flightapi(
+        ranked_results=ranked_results,
+        max_checks=3,
+        api_key=flightapi_key,
+    )
+
+    for index, item in enumerate(verifications, start=1):
+        if (
+            item["flightapi_status"]
+            == "priced_result"
+        ):
+        
+            print(
+                f"{index}. "
+                f"{item['departure_airport']} → "
+                f"{item['arrival_airport']} | "
+                f"{item['departure_date']} → "
+                f"{item['return_date']}"
+            )
+        
+            print(
+                f"   SerpApi: "
+                f"₹{item['serpapi_price']:,}"
+            )
+        
+            print(
+                f"   FlightAPI: "
+                f"{item['flightapi_currency'] or ''} "
+                f"{item['flightapi_price']}"
+            )
+        
+        elif (
+            item["flightapi_status"]
+            == "provider_restriction"
+        ):
+        
+            print(
+                f"{index}. "
+                f"{item['departure_airport']} → "
+                f"{item['arrival_airport']} | "
+                f"{item['departure_date']} → "
+                f"{item['return_date']}"
+            )
+        
+            print(
+                f"   SerpApi: "
+                f"₹{item['serpapi_price']:,}"
+            )
+        
+            print(
+                "   FlightAPI: "
+                "Skipped — provider restriction "
+                "(Russia-related route)"
+            )
+        
+        else:
+        
+            print(
+                f"{index}. "
+                f"{item['departure_airport']} → "
+                f"{item['arrival_airport']} | "
+                f"{item['departure_date']} → "
+                f"{item['return_date']}"
+            )
+        
+            print(
+                f"   SerpApi: "
+                f"₹{item['serpapi_price']:,}"
+            )
+        
+            print(
+                "   FlightAPI: "
+                "No priced result"
+            )        
+else:
+    print("FlightAPI cross-check skipped (missing FLIGHTAPI_API_KEY or no ranked results).")
 
 
 # ==========================================
