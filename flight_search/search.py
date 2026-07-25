@@ -7,6 +7,14 @@ from flight_search.planner import (
     create_search_plan,
 )
 
+from flight_search.airports import (
+    get_airports,
+)
+
+from utils.dates import (
+    generate_date_combinations,
+)
+
 from flight_search.results import (
     rank_results,
     get_cheapest_result,
@@ -152,588 +160,207 @@ def search_flexible_dates(
     Search flights using an intelligent
     date and airport search plan.
 
-    max_searches represents the TOTAL
-    number of SerpApi calls allowed
-    for the entire search.
-
-    Example:
-
-        max_searches = 10
-
-    means at most 10 SerpApi calls,
-    regardless of the number of airports.
+    max_searches is the TOTAL number of
+    SerpApi calls allowed.
     """
 
-    # ==========================================
-    # CREATE SEARCH PLAN
-    # ==========================================
-
     search_plan = create_search_plan(
-
         departure_id=departure_id,
-
         arrival_id=arrival_id,
-
         start_date=start_date,
-
         end_date=end_date,
-
         min_trip_days=min_trip_days,
-
         max_trip_days=max_trip_days,
-
         max_api_calls=max_searches,
     )
 
-
-    # ==========================================
-    # HANDLE EMPTY SEARCH PLAN
-    # ==========================================
-
     if not search_plan:
+        print("No searches planned.")
+        return {
+            "results": [],
+            "ranked_results": [],
+            "cheapest": None,
+            "cheapest_by_airport": {},
+            "cheapest_by_duration": {},
+            "statistics": {
+                "total_searches": 0,
+                "successful_api_searches": 0,
+                "no_price_searches": 0,
+                "failed_api_searches": 0,
+                "priced_results": 0,
+                "api_success_rate": 0,
+                "priced_result_rate": 0,
+                "no_price_rate": 0,
+                "cheapest_price": None,
+                "most_expensive_price": None,
+                "average_price": None,
+            },
+        }
 
-        print(
-            "No searches planned."
-        )
-
-        return []
-
-
-    # ==========================================
-    # DISPLAY SEARCH SUMMARY
-    # ==========================================
-
-    total_searches = len(
-        search_plan
-    )
-
-    print()
-
-    print("=" * 70)
-
-    print(
-        "INTELLIGENT FLIGHT SEARCH"
-    )
-
-    print("=" * 70)
-
-    print(
-        f"Route: "
-        f"{departure_id} → "
-        f"{arrival_id}"
-    )
-
-    print(
-        f"Search window: "
-        f"{start_date} → "
-        f"{end_date}"
-    )
-
-    print(
-        f"Trip duration: "
-        f"{min_trip_days}–"
-        f"{max_trip_days} days"
-    )
-
-    print(
-        f"API search budget: "
-        f"{max_searches}"
-    )
-
-    print(
-        f"Actual planned searches: "
-        f"{total_searches}"
-    )
-
-    print("=" * 70)
+    total_searches = len(search_plan)
 
     print()
-
-
-    # ==========================================
-    # EXECUTE SEARCH PLAN
-    # ==========================================
+    print("=" * 70)
+    print("INTELLIGENT FLIGHT SEARCH")
+    print("=" * 70)
+    print(f"Route: {departure_id} → {arrival_id}")
+    print(f"Search window: {start_date} → {end_date}")
+    print(f"Trip duration: {min_trip_days}–{max_trip_days} days")
+    print(f"API search budget: {max_searches}")
+    print(f"Actual planned searches: {total_searches}")
+    print("=" * 70)
+    print()
 
     results = []
-
     search_number = 0
+    successful_api_searches = 0
+    no_price_searches = 0
+    failed_api_searches = 0
 
     for search in search_plan:
-
         search_number += 1
 
-        departure_airport = (
-            search[
-                "departure_airport"
-            ]
-        )
-
-        arrival_airport = (
-            search[
-                "arrival_airport"
-            ]
-        )
-
-        departure_date = (
-            search[
-                "departure_date"
-            ]
-        )
-
-        return_date = (
-            search[
-                "return_date"
-            ]
-        )
-
+        departure_airport = search["departure_airport"]
+        arrival_airport = search["arrival_airport"]
+        departure_date = search["departure_date"]
+        return_date = search["return_date"]
 
         print(
-            f"[{search_number}/"
-            f"{total_searches}] "
-            f"{departure_airport} → "
-            f"{arrival_airport} | "
-            f"{departure_date} → "
-            f"{return_date}"
+            f"[{search_number}/{total_searches}] "
+            f"{departure_airport} → {arrival_airport} | "
+            f"{departure_date} → {return_date}"
         )
-
-
-        # ======================================
-        # CALL SERPAPI
-        # ======================================
 
         try:
-
-            search_result = (
-                search_flights(
-
-                    departure_id=(
-                        departure_airport
-                    ),
-
-                    arrival_id=(
-                        arrival_airport
-                    ),
-
-                    outbound_date=(
-                        departure_date
-                    ),
-
-                    return_date=(
-                        return_date
-                    ),
-                )
+            search_result = search_flights(
+                departure_id=departure_airport,
+                arrival_id=arrival_airport,
+                outbound_date=departure_date,
+                return_date=return_date,
             )
 
+            successful_api_searches += 1
 
-            # ==================================
-            # EXTRACT CHEAPEST
-            # ==================================
-
-            cheapest = (
-                extract_cheapest_flight(
-
-                    results=search_result,
-
-                    departure_date=(
-                        departure_date
-                    ),
-
-                    return_date=(
-                        return_date
-                    ),
-                )
+            cheapest = extract_cheapest_flight(
+                results=search_result,
+                departure_date=departure_date,
+                return_date=return_date,
             )
-
-
-            # ==================================
-            # STORE RESULT
-            # ==================================
 
             if cheapest:
+                cheapest["departure_airport"] = departure_airport
+                cheapest["arrival_airport"] = arrival_airport
+                results.append(cheapest)
 
-                cheapest[
-                    "departure_airport"
-                ] = (
-                    departure_airport
-                )
-
-                cheapest[
-                    "arrival_airport"
-                ] = (
-                    arrival_airport
-                )
-
-                results.append(
-                    cheapest
-                )
-
-
-                print(
-                    f"    Cheapest: "
-                    f"₹"
-                    f"{cheapest['price']:,}"
-                )
-
-
+                print(f"    Cheapest: ₹{cheapest['price']:,}")
             else:
-
-                print(
-                    "    No priced "
-                    "flights found."
-                )
-
+                no_price_searches += 1
+                print("    API response received, but no priced flights found.")
 
         except Exception as error:
+            failed_api_searches += 1
+            print(f"    API SEARCH ERROR: {error}")
 
-            print(
-                f"    ERROR: "
-                f"{error}"
-            )
+    assert search_number == total_searches, "API search count mismatch."
 
-
-    # ==========================================
-    # SEARCH COMPLETE
-    # ==========================================
-
-    # ==========================================
-    # RESULTS ENGINE
-    # ==========================================
-
-    ranked_results = rank_results(
-
+    ranked_results = rank_results(results=results, top_n=10)
+    cheapest_result = get_cheapest_result(results)
+    statistics = calculate_statistics(
         results=results,
-
-        top_n=10,
+        total_searches=search_number,
+        successful_api_searches=successful_api_searches,
+        no_price_searches=no_price_searches,
+        failed_api_searches=failed_api_searches,
     )
-
-
-    cheapest_result = (
-        get_cheapest_result(
-            results
-        )
-    )
-
-
-    statistics = (
-        calculate_statistics(
-
-            results=results,
-
-            total_searches=(
-                search_number
-            ),
-        )
-    )
-
-
-    cheapest_by_airport = (
-        get_cheapest_by_airport(
-            results
-        )
-    )
-
-
-    cheapest_by_duration = (
-        get_cheapest_by_trip_duration(
-            results
-        )
-    )
-
-
-    # ==========================================
-    # SEARCH COMPLETE SUMMARY
-    # ==========================================
+    cheapest_by_airport = get_cheapest_by_airport(results)
+    cheapest_by_duration = get_cheapest_by_trip_duration(results)
 
     print()
-
     print("=" * 70)
-
-    print(
-        "SEARCH COMPLETE"
-    )
-
+    print("SEARCH COMPLETE")
     print("=" * 70)
-
-    print(
-        f"API searches executed: "
-        f"{search_number}"
-    )
-
-    print(
-        f"Priced results found: "
-        f"{len(results)}"
-    )
+    print(f"API searches executed: {statistics['total_searches']}")
+    print(f"API responses successful: {statistics['successful_api_searches']}")
+    print(f"Priced flights found: {statistics['priced_results']}")
+    print(f"No priced flights: {statistics['no_price_searches']}")
+    print(f"API errors: {statistics['failed_api_searches']}")
 
     print()
-
-    # ==========================================
-    # CHEAPEST OVERALL
-    # ==========================================
-
+    print("CHEAPEST OVERALL")
+    print("-" * 70)
     if cheapest_result:
-
         print(
-            "CHEAPEST OVERALL"
+            f"₹{cheapest_result['price']:,} | "
+            f"{cheapest_result['departure_airport']} → {cheapest_result['arrival_airport']} | "
+            f"{cheapest_result['departure_date']} → {cheapest_result['return_date']}"
         )
+    else:
+        print("No priced flights found.")
 
-        print("-" * 70)
-
-        print(
-
-            f"₹"
-            f"{cheapest_result['price']:,}"
-            f" | "
-
-            f"{cheapest_result['departure_airport']}"
-            f" → "
-            f"{cheapest_result['arrival_airport']}"
-            f" | "
-
-            f"{cheapest_result['departure_date']}"
-            f" → "
-            f"{cheapest_result['return_date']}"
-
-        )
-
-        print()
-
-
-    # ==========================================
-    # TOP RESULTS
-    # ==========================================
-
-    print(
-        "TOP FLIGHT OPTIONS"
-    )
-
+    print()
+    print("TOP FLIGHT OPTIONS")
     print("-" * 70)
-
-
     if ranked_results:
-
-        for index, result in enumerate(
-
-            ranked_results,
-
-            start=1,
-
-        ):
-
+        for index, result in enumerate(ranked_results, start=1):
             print(
-
-                f"{index}. "
-
-                f"₹"
-                f"{result['price']:,}"
-                f" | "
-
-                f"{result['departure_airport']}"
-                f" → "
-                f"{result['arrival_airport']}"
-                f" | "
-
-                f"{result['departure_date']}"
-                f" → "
-                f"{result['return_date']}"
-
+                f"{index}. ₹{result['price']:,} | "
+                f"{result['departure_airport']} → {result['arrival_airport']} | "
+                f"{result['departure_date']} → {result['return_date']}"
             )
-
     else:
-
-        print(
-            "No priced flights found."
-        )
-
+        print("No priced flights found.")
 
     print()
-
-
-    # ==========================================
-    # CHEAPEST BY AIRPORT
-    # ==========================================
-
-    print(
-        "CHEAPEST BY AIRPORT"
-    )
-
+    print("CHEAPEST BY AIRPORT")
     print("-" * 70)
-
-
     if cheapest_by_airport:
-
-        for airport, result in sorted(
-
-            cheapest_by_airport.items()
-
-        ):
-
+        for airport, result in sorted(cheapest_by_airport.items()):
             print(
-
-                f"{airport}: "
-
-                f"₹"
-                f"{result['price']:,}"
-                f" | "
-
-                f"{result['departure_date']}"
-                f" → "
-                f"{result['return_date']}"
-
+                f"{airport}: ₹{result['price']:,} | "
+                f"{result['departure_date']} → {result['return_date']}"
             )
-
     else:
-
-        print(
-            "No priced flights found."
-        )
-
+        print("No priced flights found.")
 
     print()
-
-
-    # ==========================================
-    # CHEAPEST BY TRIP DURATION
-    # ==========================================
-
-    print(
-        "CHEAPEST BY TRIP DURATION"
-    )
-
+    print("CHEAPEST BY TRIP DURATION")
     print("-" * 70)
-
-
     if cheapest_by_duration:
-
-        for duration, result in sorted(
-
-            cheapest_by_duration.items()
-
-        ):
-
+        for duration, result in sorted(cheapest_by_duration.items()):
             print(
-
-                f"{duration} days: "
-
-                f"₹"
-                f"{result['price']:,}"
-                f" | "
-
-                f"{result['departure_date']}"
-                f" → "
-                f"{result['return_date']}"
-
+                f"{duration} days: ₹{result['price']:,} | "
+                f"{result['departure_date']} → {result['return_date']}"
             )
-
     else:
-
-        print(
-            "No priced flights found."
-        )
-
+        print("No priced flights found.")
 
     print()
-
-
-    # ==========================================
-    # SEARCH STATISTICS
-    # ==========================================
-
-    print(
-        "SEARCH STATISTICS"
-    )
-
+    print("SEARCH STATISTICS")
     print("-" * 70)
+    print(f"Total API searches: {statistics['total_searches']}")
+    print(f"Successful API responses: {statistics['successful_api_searches']}")
+    print(f"Priced flights found: {statistics['priced_results']}")
+    print(f"No priced flights: {statistics['no_price_searches']}")
+    print(f"API errors: {statistics['failed_api_searches']}")
+    print(f"API success rate: {statistics['api_success_rate']}%")
+    print(f"Priced result rate: {statistics['priced_result_rate']}%")
+    print(f"No-price rate: {statistics['no_price_rate']}%")
 
-    print(
-
-        f"Total searches: "
-        f"{statistics['total_searches']}"
-
-    )
-
-    print(
-
-        f"Successful searches: "
-        f"{statistics['successful_searches']}"
-
-    )
-
-    print(
-
-        f"Failed searches: "
-        f"{statistics['failed_searches']}"
-
-    )
-
-    print(
-
-        f"Success rate: "
-        f"{statistics['success_rate']}%"
-
-    )
-
-    if statistics[
-        "cheapest_price"
-    ] is not None:
-
-        print(
-
-            f"Cheapest price: "
-            f"₹"
-            f"{statistics['cheapest_price']:,}"
-
-        )
-
-        print(
-
-            f"Most expensive price: "
-            f"₹"
-            f"{statistics['most_expensive_price']:,}"
-
-        )
-
-        print(
-
-            f"Average price: "
-            f"₹"
-            f"{statistics['average_price']:,.2f}"
-
-        )
-
+    if statistics["cheapest_price"] is not None:
+        print(f"Cheapest price: ₹{statistics['cheapest_price']:,}")
+        print(f"Most expensive price: ₹{statistics['most_expensive_price']:,}")
+        print(f"Average price: ₹{statistics['average_price']:,.2f}")
     else:
-
-        print(
-            "No priced flight results."
-        )
-
+        print("No priced flight results.")
 
     print()
-
     print("=" * 70)
-
-
-    # ==========================================
-    # RETURN STRUCTURED REPORT
-    # ==========================================
 
     return {
-
-        "results":
-            results,
-
-        "ranked_results":
-            ranked_results,
-
-        "cheapest":
-            cheapest_result,
-
-        "cheapest_by_airport":
-            cheapest_by_airport,
-
-        "cheapest_by_duration":
-            cheapest_by_duration,
-
-        "statistics":
-            statistics,
-
+        "results": results,
+        "ranked_results": ranked_results,
+        "cheapest": cheapest_result,
+        "cheapest_by_airport": cheapest_by_airport,
+        "cheapest_by_duration": cheapest_by_duration,
+        "statistics": statistics,
     }

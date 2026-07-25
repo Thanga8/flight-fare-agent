@@ -95,7 +95,7 @@ print(
 
 print(
     f"Priced results found: "
-    f"{statistics['successful_searches']}"
+    f"{statistics['priced_results']}"
 )
 
 print("=" * 70)
@@ -321,24 +321,18 @@ print(
 )
 
 print(
-
-    f"Priced results found: "
-    f"{statistics['successful_searches']}"
-
+    f"No priced flights: "
+    f"{statistics['no_price_searches']}"
 )
 
 print(
-
-    f"Searches without priced results: "
-    f"{statistics['failed_searches']}"
-
+    f"API errors: "
+    f"{statistics['failed_api_searches']}"
 )
 
 print(
-
-    f"Current success rate: "
-    f"{statistics['success_rate']}%"
-
+    f"API success rate: "
+    f"{statistics['api_success_rate']}%"
 )
 
 

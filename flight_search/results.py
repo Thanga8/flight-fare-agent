@@ -48,10 +48,23 @@ def get_cheapest_result(
 def calculate_statistics(
     results,
     total_searches,
+    successful_api_searches,
+    no_price_searches,
+    failed_api_searches,
 ):
     """
-    Calculate summary statistics
-    for the flight search.
+    Calculate detailed search statistics.
+
+    successful_api_searches:
+        Number of API requests that returned
+        a valid response.
+
+    no_price_searches:
+        Number of valid API responses where
+        no priced flight was found.
+
+    failed_api_searches:
+        Number of API requests that failed.
     """
 
     valid_results = [
@@ -60,29 +73,128 @@ def calculate_statistics(
         if result.get("price") is not None
     ]
 
-    successful_searches = len(
+    priced_results = len(
         valid_results
     )
 
-    failed_searches = (
-        total_searches
-        - successful_searches
+    # ==========================================
+    # VALIDATE SEARCH COUNTS
+    # ==========================================
+
+    calculated_total = (
+        successful_api_searches
+        + failed_api_searches
     )
+
+    if calculated_total != total_searches:
+
+        raise ValueError(
+
+            "Search statistics mismatch: "
+
+            f"total_searches="
+            f"{total_searches}, "
+
+            f"successful_api_searches="
+            f"{successful_api_searches}, "
+
+            f"failed_api_searches="
+            f"{failed_api_searches}"
+
+        )
+
+
+    # ==========================================
+    # CALCULATE API SUCCESS RATE
+    # ==========================================
+
+    api_success_rate = (
+
+        successful_api_searches
+        / total_searches
+        * 100
+
+        if total_searches > 0
+
+        else 0
+
+    )
+
+
+    # ==========================================
+    # CALCULATE PRICED RESULT RATE
+    # ==========================================
+
+    priced_result_rate = (
+
+        priced_results
+        / total_searches
+        * 100
+
+        if total_searches > 0
+
+        else 0
+
+    )
+
+
+    # ==========================================
+    # NO-PRICE RATE
+    # ==========================================
+
+    no_price_rate = (
+
+        no_price_searches
+        / successful_api_searches
+        * 100
+
+        if successful_api_searches > 0
+
+        else 0
+
+    )
+
+
+    # ==========================================
+    # NO RESULTS AT ALL
+    # ==========================================
 
     if not valid_results:
 
         return {
+
             "total_searches":
                 total_searches,
 
-            "successful_searches":
-                0,
+            "successful_api_searches":
+                successful_api_searches,
 
-            "failed_searches":
-                failed_searches,
+            "no_price_searches":
+                no_price_searches,
 
-            "success_rate":
-                0,
+            "failed_api_searches":
+                failed_api_searches,
+
+            "priced_results":
+                priced_results,
+
+            "api_success_rate":
+                round(
+                    api_success_rate,
+                    2,
+                ),
+
+            "priced_result_rate":
+                round(
+                    priced_result_rate,
+                    2,
+                ),
+
+            "no_price_rate":
+                round(
+                    no_price_rate,
+                    2,
+                ),
 
             "cheapest_price":
                 None,
@@ -92,47 +204,77 @@ def calculate_statistics(
 
             "average_price":
                 None,
+
         }
 
+
+    # ==========================================
+    # PRICE STATISTICS
+    # ==========================================
+
     prices = [
+
         result["price"]
+
         for result in valid_results
+
     ]
+
 
     cheapest_price = min(
         prices
     )
 
+
     most_expensive_price = max(
         prices
     )
 
+
     average_price = (
+
         sum(prices)
         / len(prices)
+
     )
 
-    success_rate = (
-        successful_searches
-        / total_searches
-        * 100
-        if total_searches > 0
-        else 0
-    )
+
+    # ==========================================
+    # RETURN STATISTICS
+    # ==========================================
 
     return {
+
         "total_searches":
             total_searches,
 
-        "successful_searches":
-            successful_searches,
+        "successful_api_searches":
+            successful_api_searches,
 
-        "failed_searches":
-            failed_searches,
+        "no_price_searches":
+            no_price_searches,
 
-        "success_rate":
+        "failed_api_searches":
+            failed_api_searches,
+
+        "priced_results":
+            priced_results,
+
+        "api_success_rate":
             round(
-                success_rate,
+                api_success_rate,
+                2,
+            ),
+
+        "priced_result_rate":
+            round(
+                priced_result_rate,
+                2,
+            ),
+
+        "no_price_rate":
+            round(
+                no_price_rate,
                 2,
             ),
 
@@ -147,7 +289,9 @@ def calculate_statistics(
                 average_price,
                 2,
             ),
+
     }
+
 def get_cheapest_by_airport(
     results,
 ):

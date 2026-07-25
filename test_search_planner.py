@@ -124,6 +124,61 @@ print("=" * 70)
 # ==========================================
 # AUTOMATED VALIDATION
 # ==========================================
+assert (
+    statistics[
+        "total_searches"
+    ]
+    == 10
+)
+
+assert (
+    statistics[
+        "successful_api_searches"
+    ]
+    == 8
+)
+
+assert (
+    statistics[
+        "no_price_searches"
+    ]
+    == 3
+)
+
+assert (
+    statistics[
+        "failed_api_searches"
+    ]
+    == 2
+)
+
+assert (
+    statistics[
+        "priced_results"
+    ]
+    == 5
+)
+
+assert (
+    statistics[
+        "api_success_rate"
+    ]
+    == 80.0
+)
+
+assert (
+    statistics[
+        "priced_result_rate"
+    ]
+    == 50.0
+)
+
+assert (
+    statistics[
+        "no_price_rate"
+    ]
+    == 37.5
+)
 
 assert len(plan) <= MAX_API_CALLS, (
     "Search plan exceeded API budget!"
@@ -160,6 +215,9 @@ assert airport_pairs == expected_pairs, (
 
 print()
 
+print()
+
 print(
-    "✅ All planner validation tests passed."
+    "✅ All results engine "
+    "validation tests passed."
 )

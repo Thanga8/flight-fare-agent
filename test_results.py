@@ -128,8 +128,17 @@ cheapest = get_cheapest_result(
 # ==========================================
 
 statistics = calculate_statistics(
+
     results=results,
-    total_searches=TOTAL_SEARCHES,
+
+    total_searches=10,
+
+    successful_api_searches=8,
+
+    no_price_searches=3,
+
+    failed_api_searches=2,
+
 )
 
 
@@ -222,8 +231,6 @@ print(
     f"{cheapest['return_date']}"
 
 )
-
-
 print()
 
 print(
@@ -233,39 +240,63 @@ print(
 print("-" * 70)
 
 print(
-    f"Total searches: "
+    f"Total API searches: "
     f"{statistics['total_searches']}"
 )
 
 print(
-    f"Successful searches: "
-    f"{statistics['successful_searches']}"
+    f"Successful API responses: "
+    f"{statistics['successful_api_searches']}"
 )
 
 print(
-    f"Failed searches: "
-    f"{statistics['failed_searches']}"
+    f"Priced flights found: "
+    f"{statistics['priced_results']}"
 )
 
 print(
-    f"Success rate: "
-    f"{statistics['success_rate']}%"
+    f"No priced flights: "
+    f"{statistics['no_price_searches']}"
 )
 
 print(
-    f"Cheapest price: "
-    f"₹{statistics['cheapest_price']:,}"
+    f"API errors: "
+    f"{statistics['failed_api_searches']}"
 )
 
 print(
-    f"Most expensive price: "
-    f"₹{statistics['most_expensive_price']:,}"
+    f"API success rate: "
+    f"{statistics['api_success_rate']}%"
 )
 
 print(
-    f"Average price: "
-    f"₹{statistics['average_price']:,.2f}"
+    f"Priced result rate: "
+    f"{statistics['priced_result_rate']}%"
 )
+
+print(
+    f"No-price rate: "
+    f"{statistics['no_price_rate']}%"
+)
+
+if statistics[
+    "cheapest_price"
+] is not None:
+
+    print(
+        f"Cheapest price: "
+        f"₹{statistics['cheapest_price']:,}"
+    )
+
+    print(
+        f"Most expensive price: "
+        f"₹{statistics['most_expensive_price']:,}"
+    )
+
+    print(
+        f"Average price: "
+        f"₹{statistics['average_price']:,.2f}"
+    )
 
 
 print()
@@ -349,23 +380,51 @@ assert (
 
 assert (
     statistics[
-        "successful_searches"
+        "successful_api_searches"
+    ]
+    == 8
+)
+
+assert (
+    statistics[
+        "no_price_searches"
+    ]
+    == 3
+)
+
+assert (
+    statistics[
+        "failed_api_searches"
+    ]
+    == 2
+)
+
+assert (
+    statistics[
+        "priced_results"
     ]
     == 5
 )
 
 assert (
     statistics[
-        "failed_searches"
+        "api_success_rate"
     ]
-    == 5
+    == 80.0
 )
 
 assert (
     statistics[
-        "success_rate"
+        "priced_result_rate"
     ]
     == 50.0
+)
+
+assert (
+    statistics[
+        "no_price_rate"
+    ]
+    == 37.5
 )
 
 assert (
