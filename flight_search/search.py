@@ -3,14 +3,25 @@ import os
 from dotenv import load_dotenv
 import serpapi
 
-from flight_search.airports import (
-    get_airports
+from flight_search.planner import (
+    create_search_plan,
 )
-# Load environment variables
+
+
+# ==========================================
+# LOAD ENVIRONMENT VARIABLES
+# ==========================================
+
 load_dotenv()
 
-API_KEY = os.getenv("SERPAPI_API_KEY")
+API_KEY = os.getenv(
+    "SERPAPI_API_KEY"
+)
 
+
+# ==========================================
+# SERPAPI SEARCH
+# ==========================================
 
 def search_flights(
     departure_id: str,
@@ -42,9 +53,16 @@ def search_flights(
         "type": "1",
     }
 
-    results = client.search(params)
+    results = client.search(
+        params
+    )
 
     return results
+
+
+# ==========================================
+# EXTRACT CHEAPEST FLIGHT
+# ==========================================
 
 def extract_cheapest_flight(
     results,
@@ -90,18 +108,28 @@ def extract_cheapest_flight(
     )
 
     return {
-        "departure_date": departure_date,
-        "return_date": return_date,
-        "price": cheapest["price"],
-        "duration": cheapest.get(
-            "total_duration"
-        ),
-        "flight": cheapest,
+        "departure_date":
+            departure_date,
+
+        "return_date":
+            return_date,
+
+        "price":
+            cheapest["price"],
+
+        "duration":
+            cheapest.get(
+                "total_duration"
+            ),
+
+        "flight":
+            cheapest,
     }
 
-from utils.dates import (
-    generate_date_combinations
-)
+
+# ==========================================
+# FLEXIBLE DATE SEARCH
+# ==========================================
 
 def search_flexible_dates(
     departure_id: str,
@@ -113,151 +141,272 @@ def search_flexible_dates(
     max_searches: int = 20,
 ):
     """
-    Search flights across multiple
-    departure and arrival airports.
+    Search flights using an intelligent
+    date and airport search plan.
 
-    max_searches applies to each
-    airport/date combination.
+    max_searches represents the TOTAL
+    number of SerpApi calls allowed
+    for the entire search.
+
+    Example:
+
+        max_searches = 10
+
+    means at most 10 SerpApi calls,
+    regardless of the number of airports.
     """
 
-    combinations = (
-        generate_date_combinations(
-            start_date=start_date,
-            end_date=end_date,
-            min_trip_days=min_trip_days,
-            max_trip_days=max_trip_days,
+    # ==========================================
+    # CREATE SEARCH PLAN
+    # ==========================================
+
+    search_plan = create_search_plan(
+
+        departure_id=departure_id,
+
+        arrival_id=arrival_id,
+
+        start_date=start_date,
+
+        end_date=end_date,
+
+        min_trip_days=min_trip_days,
+
+        max_trip_days=max_trip_days,
+
+        max_api_calls=max_searches,
+    )
+
+
+    # ==========================================
+    # HANDLE EMPTY SEARCH PLAN
+    # ==========================================
+
+    if not search_plan:
+
+        print(
+            "No searches planned."
         )
+
+        return []
+
+
+    # ==========================================
+    # DISPLAY SEARCH SUMMARY
+    # ==========================================
+
+    total_searches = len(
+        search_plan
     )
 
-    # Limit date combinations
-    combinations = combinations[
-        :max_searches
-    ]
+    print()
 
-    departure_airports = (
-        get_airports(departure_id)
+    print("=" * 70)
+
+    print(
+        "INTELLIGENT FLIGHT SEARCH"
     )
 
-    arrival_airports = (
-        get_airports(arrival_id)
-    )
+    print("=" * 70)
 
-    results = []
-
-    total_searches = (
-        len(combinations)
-        * len(departure_airports)
-        * len(arrival_airports)
+    print(
+        f"Route: "
+        f"{departure_id} → "
+        f"{arrival_id}"
     )
 
     print(
-        f"Total planned searches: "
+        f"Search window: "
+        f"{start_date} → "
+        f"{end_date}"
+    )
+
+    print(
+        f"Trip duration: "
+        f"{min_trip_days}–"
+        f"{max_trip_days} days"
+    )
+
+    print(
+        f"API search budget: "
+        f"{max_searches}"
+    )
+
+    print(
+        f"Actual planned searches: "
         f"{total_searches}"
     )
 
+    print("=" * 70)
+
+    print()
+
+
+    # ==========================================
+    # EXECUTE SEARCH PLAN
+    # ==========================================
+
+    results = []
+
     search_number = 0
 
-    for departure_airport in (
-        departure_airports
-    ):
+    for search in search_plan:
 
-        for arrival_airport in (
-            arrival_airports
-        ):
+        search_number += 1
 
-            for combination in (
-                combinations
-            ):
+        departure_airport = (
+            search[
+                "departure_airport"
+            ]
+        )
 
-                search_number += 1
+        arrival_airport = (
+            search[
+                "arrival_airport"
+            ]
+        )
 
-                departure_date = (
-                    combination[
-                        "departure_date"
-                    ]
+        departure_date = (
+            search[
+                "departure_date"
+            ]
+        )
+
+        return_date = (
+            search[
+                "return_date"
+            ]
+        )
+
+
+        print(
+            f"[{search_number}/"
+            f"{total_searches}] "
+            f"{departure_airport} → "
+            f"{arrival_airport} | "
+            f"{departure_date} → "
+            f"{return_date}"
+        )
+
+
+        # ======================================
+        # CALL SERPAPI
+        # ======================================
+
+        try:
+
+            search_result = (
+                search_flights(
+
+                    departure_id=(
+                        departure_airport
+                    ),
+
+                    arrival_id=(
+                        arrival_airport
+                    ),
+
+                    outbound_date=(
+                        departure_date
+                    ),
+
+                    return_date=(
+                        return_date
+                    ),
+                )
+            )
+
+
+            # ==================================
+            # EXTRACT CHEAPEST
+            # ==================================
+
+            cheapest = (
+                extract_cheapest_flight(
+
+                    results=search_result,
+
+                    departure_date=(
+                        departure_date
+                    ),
+
+                    return_date=(
+                        return_date
+                    ),
+                )
+            )
+
+
+            # ==================================
+            # STORE RESULT
+            # ==================================
+
+            if cheapest:
+
+                cheapest[
+                    "departure_airport"
+                ] = (
+                    departure_airport
                 )
 
-                return_date = (
-                    combination[
-                        "return_date"
-                    ]
+                cheapest[
+                    "arrival_airport"
+                ] = (
+                    arrival_airport
                 )
+
+                results.append(
+                    cheapest
+                )
+
 
                 print(
-                    f"[{search_number}/"
-                    f"{total_searches}] "
-                    f"{departure_airport} → "
-                    f"{arrival_airport} | "
-                    f"{departure_date} → "
-                    f"{return_date}"
+                    f"    Cheapest: "
+                    f"₹"
+                    f"{cheapest['price']:,}"
                 )
 
-                try:
 
-                    search_result = (
-                        search_flights(
-                            departure_id=(
-                                departure_airport
-                            ),
-                            arrival_id=(
-                                arrival_airport
-                            ),
-                            outbound_date=(
-                                departure_date
-                            ),
-                            return_date=(
-                                return_date
-                            ),
-                        )
-                    )
+            else:
 
-                    cheapest = (
-                        extract_cheapest_flight(
-                            results=search_result,
-                            departure_date=(
-                                departure_date
-                            ),
-                            return_date=(
-                                return_date
-                            ),
-                        )
-                    )
+                print(
+                    "    No priced "
+                    "flights found."
+                )
 
-                    if cheapest:
 
-                        cheapest[
-                            "departure_airport"
-                        ] = (
-                            departure_airport
-                        )
+        except Exception as error:
 
-                        cheapest[
-                            "arrival_airport"
-                        ] = (
-                            arrival_airport
-                        )
+            print(
+                f"    ERROR: "
+                f"{error}"
+            )
 
-                        results.append(
-                            cheapest
-                        )
 
-                        print(
-                            f"    Cheapest: "
-                            f"₹{cheapest['price']:,}"
-                        )
+    # ==========================================
+    # SEARCH COMPLETE
+    # ==========================================
 
-                    else:
+    print()
 
-                        print(
-                            "    No priced "
-                            "flights found."
-                        )
+    print("=" * 70)
 
-                except Exception as error:
+    print(
+        "SEARCH COMPLETE"
+    )
 
-                    print(
-                        f"    ERROR: "
-                        f"{error}"
-                    )
+    print("=" * 70)
+
+    print(
+        f"API searches executed: "
+        f"{search_number}"
+    )
+
+    print(
+        f"Priced results found: "
+        f"{len(results)}"
+    )
+
+    print("=" * 70)
 
     return results
