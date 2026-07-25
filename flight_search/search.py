@@ -1,7 +1,6 @@
 import os
-
 from dotenv import load_dotenv
-import serpapi
+from flight_search.providers import get_default_provider
 
 from flight_search.planner import (
     create_search_plan,
@@ -39,46 +38,39 @@ API_KEY = os.getenv(
     "SERPAPI_API_KEY"
 )
 
+_PROVIDER = None
 
-# ==========================================
-# SERPAPI SEARCH
-# ==========================================
+
+def get_search_provider(provider=None):
+    global _PROVIDER
+
+    if provider is not None:
+        return provider
+
+    if _PROVIDER is None:
+        _PROVIDER = get_default_provider()
+
+    return _PROVIDER
+
 
 def search_flights(
     departure_id: str,
     arrival_id: str,
     outbound_date: str,
     return_date: str,
+    provider=None,
 ):
     """
-    Search Google Flights through SerpApi.
+    Search flights through the active provider.
     """
+    active_provider = get_search_provider(provider)
 
-    if not API_KEY:
-        raise ValueError(
-            "SERPAPI_API_KEY not found."
-        )
-
-    client = serpapi.Client(
-        api_key=API_KEY
+    return active_provider.search_round_trip(
+        departure_id=departure_id,
+        arrival_id=arrival_id,
+        outbound_date=outbound_date,
+        return_date=return_date,
     )
-
-    params = {
-        "engine": "google_flights",
-        "departure_id": departure_id,
-        "arrival_id": arrival_id,
-        "outbound_date": outbound_date,
-        "return_date": return_date,
-        "currency": "INR",
-        "hl": "en",
-        "type": "1",
-    }
-
-    results = client.search(
-        params
-    )
-
-    return results
 
 
 # ==========================================
