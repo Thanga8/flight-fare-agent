@@ -57,10 +57,11 @@ def sample_date_combinations(
 ):
     """
     Select date combinations distributed
-    across the entire search space.
+    across the entire search window.
 
-    This prevents us from searching only
-    the earliest dates in the window.
+    The selected combinations are spread
+    evenly across the available date range
+    instead of simply taking the first N.
     """
 
     if not combinations:
@@ -69,24 +70,24 @@ def sample_date_combinations(
     if sample_size <= 0:
         return []
 
-    if sample_size >= len(combinations):
+    if len(combinations) <= sample_size:
         return combinations
 
     if sample_size == 1:
-        return [combinations[0]]
+        return [
+            combinations[0]
+        ]
 
     sampled = []
 
-    step = (
-        len(combinations) - 1
-    ) / (
-        sample_size - 1
-    )
+    total = len(combinations)
 
     for index in range(sample_size):
 
         position = round(
-            index * step
+            index
+            * (total - 1)
+            / (sample_size - 1)
         )
 
         sampled.append(
