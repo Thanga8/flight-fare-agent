@@ -7,6 +7,14 @@ from flight_search.planner import (
     create_search_plan,
 )
 
+from flight_search.results import (
+    rank_results,
+    get_cheapest_result,
+    calculate_statistics,
+    get_cheapest_by_airport,
+    get_cheapest_by_trip_duration,
+)
+
 
 # ==========================================
 # LOAD ENVIRONMENT VARIABLES
@@ -387,6 +395,55 @@ def search_flexible_dates(
     # SEARCH COMPLETE
     # ==========================================
 
+    # ==========================================
+    # RESULTS ENGINE
+    # ==========================================
+
+    ranked_results = rank_results(
+
+        results=results,
+
+        top_n=10,
+    )
+
+
+    cheapest_result = (
+        get_cheapest_result(
+            results
+        )
+    )
+
+
+    statistics = (
+        calculate_statistics(
+
+            results=results,
+
+            total_searches=(
+                search_number
+            ),
+        )
+    )
+
+
+    cheapest_by_airport = (
+        get_cheapest_by_airport(
+            results
+        )
+    )
+
+
+    cheapest_by_duration = (
+        get_cheapest_by_trip_duration(
+            results
+        )
+    )
+
+
+    # ==========================================
+    # SEARCH COMPLETE SUMMARY
+    # ==========================================
+
     print()
 
     print("=" * 70)
@@ -407,6 +464,276 @@ def search_flexible_dates(
         f"{len(results)}"
     )
 
+    print()
+
+    # ==========================================
+    # CHEAPEST OVERALL
+    # ==========================================
+
+    if cheapest_result:
+
+        print(
+            "CHEAPEST OVERALL"
+        )
+
+        print("-" * 70)
+
+        print(
+
+            f"₹"
+            f"{cheapest_result['price']:,}"
+            f" | "
+
+            f"{cheapest_result['departure_airport']}"
+            f" → "
+            f"{cheapest_result['arrival_airport']}"
+            f" | "
+
+            f"{cheapest_result['departure_date']}"
+            f" → "
+            f"{cheapest_result['return_date']}"
+
+        )
+
+        print()
+
+
+    # ==========================================
+    # TOP RESULTS
+    # ==========================================
+
+    print(
+        "TOP FLIGHT OPTIONS"
+    )
+
+    print("-" * 70)
+
+
+    if ranked_results:
+
+        for index, result in enumerate(
+
+            ranked_results,
+
+            start=1,
+
+        ):
+
+            print(
+
+                f"{index}. "
+
+                f"₹"
+                f"{result['price']:,}"
+                f" | "
+
+                f"{result['departure_airport']}"
+                f" → "
+                f"{result['arrival_airport']}"
+                f" | "
+
+                f"{result['departure_date']}"
+                f" → "
+                f"{result['return_date']}"
+
+            )
+
+    else:
+
+        print(
+            "No priced flights found."
+        )
+
+
+    print()
+
+
+    # ==========================================
+    # CHEAPEST BY AIRPORT
+    # ==========================================
+
+    print(
+        "CHEAPEST BY AIRPORT"
+    )
+
+    print("-" * 70)
+
+
+    if cheapest_by_airport:
+
+        for airport, result in sorted(
+
+            cheapest_by_airport.items()
+
+        ):
+
+            print(
+
+                f"{airport}: "
+
+                f"₹"
+                f"{result['price']:,}"
+                f" | "
+
+                f"{result['departure_date']}"
+                f" → "
+                f"{result['return_date']}"
+
+            )
+
+    else:
+
+        print(
+            "No priced flights found."
+        )
+
+
+    print()
+
+
+    # ==========================================
+    # CHEAPEST BY TRIP DURATION
+    # ==========================================
+
+    print(
+        "CHEAPEST BY TRIP DURATION"
+    )
+
+    print("-" * 70)
+
+
+    if cheapest_by_duration:
+
+        for duration, result in sorted(
+
+            cheapest_by_duration.items()
+
+        ):
+
+            print(
+
+                f"{duration} days: "
+
+                f"₹"
+                f"{result['price']:,}"
+                f" | "
+
+                f"{result['departure_date']}"
+                f" → "
+                f"{result['return_date']}"
+
+            )
+
+    else:
+
+        print(
+            "No priced flights found."
+        )
+
+
+    print()
+
+
+    # ==========================================
+    # SEARCH STATISTICS
+    # ==========================================
+
+    print(
+        "SEARCH STATISTICS"
+    )
+
+    print("-" * 70)
+
+    print(
+
+        f"Total searches: "
+        f"{statistics['total_searches']}"
+
+    )
+
+    print(
+
+        f"Successful searches: "
+        f"{statistics['successful_searches']}"
+
+    )
+
+    print(
+
+        f"Failed searches: "
+        f"{statistics['failed_searches']}"
+
+    )
+
+    print(
+
+        f"Success rate: "
+        f"{statistics['success_rate']}%"
+
+    )
+
+    if statistics[
+        "cheapest_price"
+    ] is not None:
+
+        print(
+
+            f"Cheapest price: "
+            f"₹"
+            f"{statistics['cheapest_price']:,}"
+
+        )
+
+        print(
+
+            f"Most expensive price: "
+            f"₹"
+            f"{statistics['most_expensive_price']:,}"
+
+        )
+
+        print(
+
+            f"Average price: "
+            f"₹"
+            f"{statistics['average_price']:,.2f}"
+
+        )
+
+    else:
+
+        print(
+            "No priced flight results."
+        )
+
+
+    print()
+
     print("=" * 70)
 
-    return results
+
+    # ==========================================
+    # RETURN STRUCTURED REPORT
+    # ==========================================
+
+    return {
+
+        "results":
+            results,
+
+        "ranked_results":
+            ranked_results,
+
+        "cheapest":
+            cheapest_result,
+
+        "cheapest_by_airport":
+            cheapest_by_airport,
+
+        "cheapest_by_duration":
+            cheapest_by_duration,
+
+        "statistics":
+            statistics,
+
+    }
