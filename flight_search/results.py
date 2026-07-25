@@ -408,3 +408,73 @@ def get_cheapest_by_trip_duration(
 
     return cheapest_by_duration
 
+def rank_airports_by_price(
+    results,
+):
+    """
+    Rank airport pairs based on the
+    cheapest priced flight found.
+    """
+
+    airport_prices = {}
+
+    for result in results:
+
+        departure_airport = result.get(
+            "departure_airport"
+        )
+
+        arrival_airport = result.get(
+            "arrival_airport"
+        )
+
+        price = result.get(
+            "price"
+        )
+
+        if (
+            departure_airport is None
+            or arrival_airport is None
+            or price is None
+        ):
+            continue
+
+        airport_pair = (
+            f"{departure_airport}"
+            f"→"
+            f"{arrival_airport}"
+        )
+
+        if (
+            airport_pair not in airport_prices
+            or price
+            < airport_prices[
+                airport_pair
+            ]["price"]
+        ):
+
+            airport_prices[
+                airport_pair
+            ] = {
+                "airport_pair":
+                    airport_pair,
+
+                "departure_airport":
+                    departure_airport,
+
+                "arrival_airport":
+                    arrival_airport,
+
+                "price":
+                    price,
+
+                "result":
+                    result,
+            }
+
+    return sorted(
+        airport_prices.values(),
+        key=lambda item: item[
+            "price"
+        ],
+    )

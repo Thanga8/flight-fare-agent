@@ -15,7 +15,7 @@ END_DATE = "2027-02-13"
 MIN_TRIP_DAYS = 5
 MAX_TRIP_DAYS = 6
 
-MAX_SEARCHES = 5
+MAX_SEARCHES = 8
 
 
 # ==========================================
