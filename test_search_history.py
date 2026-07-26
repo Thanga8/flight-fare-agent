@@ -4,33 +4,29 @@ from search_history import (
 
 
 print("=" * 70)
-print("UNIFIED PRICE INTELLIGENCE TEST")
+print("PRICE INTELLIGENCE TEST")
 print("=" * 70)
 
 
 # ==========================================
-# TEST 1 — KNOWN EXACT DATE
+# TEST 1 — EXACT DATE HISTORY
 # ==========================================
 
 print()
-print("TEST 1 — KNOWN EXACT DATE")
+print("TEST 1 — EXACT DATE HISTORY")
 print("-" * 70)
 
 result = analyze_price_intelligence(
 
     origin="HYD",
 
-    destination="MOW",
+    destination="SVO",
 
     departure_date="2027-02-08",
 
     return_date="2027-02-13",
 
-    current_price=68000,
-
-    min_trip_days=5,
-
-    max_trip_days=6,
+    current_price=65000,
 
 )
 
@@ -38,86 +34,50 @@ print(result)
 
 
 # ==========================================
-# TEST 2 — DIFFERENT PRICE
+# TEST 2 — NO EXACT DATE
+# SHOULD FALL BACK TO COMPARABLE HISTORY
 # ==========================================
 
 print()
-print("TEST 2 — EXPENSIVE CURRENT PRICE")
+print("TEST 2 — COMPARABLE HISTORICAL DATA")
 print("-" * 70)
 
 result = analyze_price_intelligence(
 
     origin="HYD",
 
-    destination="MOW",
+    destination="SVO",
 
-    departure_date="2027-02-08",
+    departure_date="2027-01-21",
 
-    return_date="2027-02-13",
-
-    current_price=100000,
-
-    min_trip_days=5,
-
-    max_trip_days=6,
-
-)
-
-print(result)
-
-
-# ==========================================
-# TEST 3 — NEW TRAVEL DATES
-# ==========================================
-
-print()
-print("TEST 3 — NEW TRAVEL DATES")
-print("-" * 70)
-
-result = analyze_price_intelligence(
-
-    origin="HYD",
-
-    destination="MOW",
-
-    departure_date="2027-02-01",
-
-    return_date="2027-02-06",
+    return_date="2027-01-26",
 
     current_price=70000,
 
-    min_trip_days=5,
-
-    max_trip_days=6,
-
 )
 
 print(result)
 
 
 # ==========================================
-# TEST 4 — COMPLETELY NEW ROUTE
+# TEST 3 — COMPLETELY NEW ROUTE
 # ==========================================
 
 print()
-print("TEST 4 — NEW ROUTE")
+print("TEST 3 — NO HISTORICAL DATA")
 print("-" * 70)
 
 result = analyze_price_intelligence(
 
     origin="HYD",
 
-    destination="LED",
+    destination="JFK",
 
-    departure_date="2027-02-01",
+    departure_date="2027-03-01",
 
-    return_date="2027-02-06",
+    return_date="2027-03-06",
 
-    current_price=70000,
-
-    min_trip_days=5,
-
-    max_trip_days=6,
+    current_price=80000,
 
 )
 

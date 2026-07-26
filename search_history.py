@@ -653,6 +653,340 @@ def get_comparable_historical_prices(
             historical_results,
     }
 
+# ==========================================
+# COMPARE PRICE WITH COMPARABLE HISTORY
+# ==========================================
+
+def compare_price_with_comparable_history(
+    origin,
+    destination,
+    departure_date,
+    return_date,
+    current_price,
+):
+    """
+    Compare the current flight price against
+    the best available level of historical data.
+
+    Comparison hierarchy:
+
+    1. Exact travel dates
+    2. Nearby departure dates + similar trip duration
+    3. Same departure month + similar trip duration
+    4. Route-wide historical data
+
+    Returns the comparison level used so the
+    caller knows how relevant the historical
+    comparison is.
+    """
+
+    from datetime import datetime
+
+    # ==========================================
+    # CALCULATE TRIP DURATION
+    # ==========================================
+
+    departure = datetime.strptime(
+        departure_date,
+        "%Y-%m-%d",
+    )
+
+    return_date_obj = datetime.strptime(
+        return_date,
+        "%Y-%m-%d",
+    )
+
+    trip_days = (
+        return_date_obj - departure
+    ).days
+
+    # ==========================================
+    # GET COMPARABLE HISTORICAL RESULTS
+    # ==========================================
+
+    comparable_history = (
+        get_comparable_historical_prices(
+
+            origin=origin,
+
+            destination=destination,
+
+            departure_date=departure_date,
+
+            return_date=return_date,
+
+        )
+    )
+
+    comparison_level = (
+        comparable_history[
+            "comparison_level"
+        ]
+    )
+
+    historical_results = (
+        comparable_history[
+            "results"
+        ]
+    )
+
+    # ==========================================
+    # NO HISTORICAL DATA
+    # ==========================================
+
+    if not historical_results:
+
+        return {
+
+            "origin":
+                origin,
+
+            "destination":
+                destination,
+
+            "departure_date":
+                departure_date,
+
+            "return_date":
+                return_date,
+
+            "trip_days":
+                trip_days,
+
+            "current_price":
+                current_price,
+
+            "comparison_level":
+                "none",
+
+            "historical_low":
+                None,
+
+            "historical_high":
+                None,
+
+            "historical_average":
+                None,
+
+            "historical_count":
+                0,
+
+            "difference_from_low_percent":
+                None,
+
+            "difference_from_average_percent":
+                None,
+
+            "assessment":
+                "NO_HISTORICAL_DATA",
+
+            "confidence":
+                "NONE",
+
+        }
+
+    # ==========================================
+    # EXTRACT HISTORICAL PRICES
+    # ==========================================
+
+    prices = [
+
+        result["price"]
+
+        for result in historical_results
+
+        if result.get("price") is not None
+
+    ]
+
+    if not prices:
+
+        return {
+
+            "comparison_level":
+                comparison_level,
+
+            "historical_count":
+                0,
+
+            "assessment":
+                "NO_HISTORICAL_DATA",
+
+            "confidence":
+                "NONE",
+
+        }
+
+    # ==========================================
+    # CALCULATE STATISTICS
+    # ==========================================
+
+    historical_low = min(prices)
+
+    historical_high = max(prices)
+
+    historical_average = (
+        sum(prices)
+        / len(prices)
+    )
+
+    historical_count = len(prices)
+
+    # ==========================================
+    # PRICE DIFFERENCES
+    # ==========================================
+
+    difference_from_low_percent = (
+
+        (
+            current_price
+            - historical_low
+        )
+
+        / historical_low
+
+        * 100
+
+    )
+
+    difference_from_average_percent = (
+
+        (
+            current_price
+            - historical_average
+        )
+
+        / historical_average
+
+        * 100
+
+    )
+
+    # ==========================================
+    # PRICE ASSESSMENT
+    # ==========================================
+
+    if current_price <= historical_low:
+
+        assessment = (
+            "NEW_HISTORICAL_LOW"
+        )
+
+    elif (
+        current_price
+        <= historical_average * 0.95
+    ):
+
+        assessment = (
+            "VERY_GOOD_PRICE"
+        )
+
+    elif (
+        current_price
+        <= historical_average
+    ):
+
+        assessment = (
+            "GOOD_PRICE"
+        )
+
+    elif (
+        current_price
+        <= historical_average * 1.10
+    ):
+
+        assessment = (
+            "ABOVE_AVERAGE"
+        )
+
+    else:
+
+        assessment = (
+            "EXPENSIVE"
+        )
+
+    # ==========================================
+    # CONFIDENCE
+    # ==========================================
+
+    if historical_count >= 10:
+
+        confidence = "HIGH"
+
+    elif historical_count >= 5:
+
+        confidence = "MEDIUM"
+
+    elif historical_count >= 2:
+
+        confidence = "LOW"
+
+    else:
+
+        confidence = "VERY_LOW"
+
+    # ==========================================
+    # RETURN RESULT
+    # ==========================================
+
+    return {
+
+        "origin":
+            origin,
+
+        "destination":
+            destination,
+
+        "departure_date":
+            departure_date,
+
+        "return_date":
+            return_date,
+
+        "trip_days":
+            trip_days,
+
+        "current_price":
+            current_price,
+
+        "comparison_level":
+            comparison_level,
+
+        "historical_low":
+            historical_low,
+
+        "historical_high":
+            historical_high,
+
+        "historical_average":
+            round(
+                historical_average,
+                2,
+            ),
+
+        "historical_count":
+            historical_count,
+
+        "difference_from_low_percent":
+            round(
+                difference_from_low_percent,
+                2,
+            ),
+
+        "difference_from_average_percent":
+            round(
+                difference_from_average_percent,
+                2,
+            ),
+
+        "assessment":
+            assessment,
+
+        "confidence":
+            confidence,
+
+    }
+
 def compare_price_with_history(
     origin,
     destination,
@@ -1074,52 +1408,35 @@ def compare_price_with_route_history(
             confidence,
     }
 
+# ==========================================
+# COMPLETE PRICE INTELLIGENCE
+# ==========================================
+
 def analyze_price_intelligence(
     origin,
     destination,
     departure_date,
     return_date,
     current_price,
-    min_trip_days=None,
-    max_trip_days=None,
 ):
     """
-    Combine exact-date historical analysis
-    and route-level historical analysis.
+    Perform complete historical price analysis.
 
-    This function does not replace either
-    historical comparison function.
+    The system automatically selects the best
+    available historical comparison:
 
-    It combines both results into one
-    structured price intelligence response.
+    1. Exact travel dates
+    2. Nearby dates + similar duration
+    3. Same month + similar duration
+    4. Route-wide history
     """
 
     # ==========================================
-    # CALCULATE CURRENT TRIP DURATION
+    # COMPARABLE HISTORY ANALYSIS
     # ==========================================
 
-    from datetime import datetime
-
-    departure = datetime.strptime(
-        departure_date,
-        "%Y-%m-%d",
-    )
-
-    return_date_obj = datetime.strptime(
-        return_date,
-        "%Y-%m-%d",
-    )
-
-    trip_days = (
-        return_date_obj - departure
-    ).days
-
-    # ==========================================
-    # EXACT-DATE HISTORICAL ANALYSIS
-    # ==========================================
-
-    exact_date_analysis = (
-        compare_price_with_history(
+    historical_analysis = (
+        compare_price_with_comparable_history(
 
             origin=origin,
 
@@ -1135,29 +1452,7 @@ def analyze_price_intelligence(
     )
 
     # ==========================================
-    # ROUTE-LEVEL HISTORICAL ANALYSIS
-    # ==========================================
-
-    route_history_analysis = (
-        compare_price_with_route_history(
-
-            origin=origin,
-
-            destination=destination,
-
-            trip_days=trip_days,
-
-            current_price=current_price,
-
-            min_trip_days=min_trip_days,
-
-            max_trip_days=max_trip_days,
-
-        )
-    )
-
-    # ==========================================
-    # RETURN UNIFIED ANALYSIS
+    # RETURN UNIFIED PRICE INTELLIGENCE
     # ==========================================
 
     return {
@@ -1181,17 +1476,16 @@ def analyze_price_intelligence(
                 return_date,
 
             "trip_days":
-                trip_days,
+                historical_analysis[
+                    "trip_days"
+                ],
 
         },
 
         "current_price":
             current_price,
 
-        "exact_date_history":
-            exact_date_analysis,
-
-        "route_history":
-            route_history_analysis,
+        "historical_analysis":
+            historical_analysis,
 
     }
