@@ -2,6 +2,15 @@ import os
 from dotenv import load_dotenv
 from flight_search.providers import get_default_provider
 
+from flight_search.database.db import (
+    get_connection,
+)
+from flight_search.database.db import (
+    create_search_run,
+    save_flight_result,
+    update_search_run_statistics,
+    update_flight_result_scores,
+)
 from flight_search.planner import (
     create_search_plan,
 )
@@ -234,6 +243,53 @@ def search_flexible_dates(
         }
 
     # ==========================================
+    # CREATE DATABASE SEARCH RUN
+    # ==========================================
+
+    connection = get_connection()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        INSERT INTO search_runs (
+            searched_at,
+            origin,
+            destination,
+            start_date,
+            end_date,
+            min_trip_days,
+            max_trip_days,
+            api_budget
+        )
+        VALUES (
+            datetime('now'),
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?,
+            ?
+        )
+        """,
+        (
+            departure_id,
+            arrival_id,
+            start_date,
+            end_date,
+            min_trip_days,
+            max_trip_days,
+            max_searches,
+        ),
+    )
+
+    search_run_id = cursor.lastrowid
+
+    connection.commit()
+
+    connection.close()
+    # ==========================================
     # DETERMINE PHASE 1 BUDGET
     # ==========================================
 
@@ -417,7 +473,7 @@ def search_flexible_dates(
                 )
 
                 if cheapest:
-
+                
                     cheapest[
                         "departure_airport"
                     ] = departure_airport
@@ -435,11 +491,20 @@ def search_flexible_dates(
                     results.append(
                         cheapest
                     )
+                    flight_result_id = save_flight_result(
+                        search_run_id=search_run_id,
+                        result=cheapest,
+                    )
+                    cheapest["db_id"] = flight_result_id
+                    
+
+                    print(
+                        "    Saved to database."
+                    )
 
                     print(
                         f"    Cheapest: "
-                        f"₹"
-                        f"{cheapest['price']:,}"
+                        f"₹{cheapest['price']:,}"
                     )
 
                 else:
@@ -616,7 +681,6 @@ def search_flexible_dates(
 
     scored_results = []
 
-
     for result in results:
 
         flight = result.get(
@@ -648,6 +712,12 @@ def search_flexible_dates(
             scored_result
         )
 
+        flight_result_id = result.get("db_id")
+        if flight_result_id is not None:
+            update_flight_result_scores(
+                flight_result_id=flight_result_id,
+                scores=scores,
+            )
 
     # ==========================================
     # SORT BY FINAL SCORE
@@ -677,6 +747,15 @@ def search_flexible_dates(
         ),
     )
 
+    try:
+        update_search_run_statistics(
+            search_run_id=search_run_id,
+            statistics=statistics,
+        )
+    except Exception as error:
+        print(
+            f"Warning: could not update search run statistics: {error}"
+        )
     cheapest_by_airport = (
         get_cheapest_by_airport(
             results
