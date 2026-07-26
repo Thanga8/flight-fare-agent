@@ -124,141 +124,25 @@ def extract_cheapest_flight(
     )
 
     return {
-        
-        "departure_date": departure_date,
-        "return_date": return_date,
-        "price": cheapest["price"],
-        "duration": cheapest.get(
-            "total_duration"
-        ),
-        "flight": cheapest,
+        "departure_date":
+            departure_date,
+
+        "return_date":
+            return_date,
+
+        "price":
+            cheapest["price"],
+
+        "duration":
+            cheapest.get(
+                "total_duration"
+            ),
+
+        "flight":
+            cheapest,
     }
 
-def search_one_way_dates(
-    departure_id: str,
-    arrival_id: str,
-    start_date: str,
-    end_date: str,
-    max_searches: int = 20,
-):
-    """
-    Search one-way flights across a date range.
 
-    max_searches is the total number of
-    API calls allowed.
-    """
-
-    from datetime import date, timedelta
-
-    start = date.fromisoformat(start_date)
-    end = date.fromisoformat(end_date)
-
-    dates = []
-
-    current = start
-
-    while current <= end:
-        dates.append(
-            current.isoformat()
-        )
-
-        current += timedelta(days=1)
-
-    dates = dates[:max_searches]
-
-    results = []
-
-    total_searches = len(dates)
-
-    print()
-    print("=" * 70)
-    print("ONE-WAY FLIGHT SEARCH")
-    print("=" * 70)
-    print(
-        f"Route: "
-        f"{departure_id} → {arrival_id}"
-    )
-    print(
-        f"Search window: "
-        f"{start_date} → {end_date}"
-    )
-    print(
-        f"API search budget: "
-        f"{max_searches}"
-    )
-    print(
-        f"Actual searches: "
-        f"{total_searches}"
-    )
-    print("=" * 70)
-    print()
-
-    for index, departure_date in enumerate(
-        dates,
-        start=1,
-    ):
-
-        print(
-            f"[{index}/{total_searches}] "
-            f"{departure_id} → "
-            f"{arrival_id} | "
-            f"{departure_date}"
-        )
-
-        try:
-
-            search_result = search_flights(
-                departure_id=departure_id,
-                arrival_id=arrival_id,
-                outbound_date=departure_date,
-                return_date=None,
-            )
-
-            cheapest = extract_cheapest_flight(
-                results=search_result,
-                departure_date=departure_date,
-                return_date=None,
-            )
-
-            if cheapest:
-
-                cheapest[
-                    "departure_airport"
-                ] = departure_id
-
-                cheapest[
-                    "arrival_airport"
-                ] = arrival_id
-
-                results.append(
-                    cheapest
-                )
-
-                print(
-                    f"    Cheapest: "
-                    f"₹{cheapest['price']:,}"
-                )
-
-            else:
-
-                print(
-                    "    No priced "
-                    "flights found."
-                )
-
-        except Exception as error:
-
-            print(
-                f"    API SEARCH ERROR: "
-                f"{error}"
-            )
-
-    results.sort(
-        key=lambda result:
-        result["price"]
-    )
-
-    return results
 # ==========================================
 # FLEXIBLE DATE SEARCH
 # ==========================================
@@ -1028,60 +912,60 @@ def search_flexible_dates(
     print("=" * 70)
     print("SCORED FLIGHT RESULTS")
     print("=" * 70)
-
+    
     if scored_results:
-
+    
         for index, result in enumerate(
             scored_results[:10],
             start=1,
         ):
-
+    
             print()
-
+    
             print(
                 f"{index}. "
                 f"₹{result['price']:,} | "
                 f"{result['departure_airport']} → "
                 f"{result['arrival_airport']}"
             )
-
+    
             print(
                 f"   Dates: "
                 f"{result['departure_date']} → "
                 f"{result['return_date']}"
             )
-
+    
             print(
                 f"   Price score: "
                 f"{result['price_score']}"
             )
-
+    
             print(
                 f"   Duration score: "
                 f"{result['duration_score']}"
             )
-
+    
             print(
                 f"   Stops score: "
                 f"{result['stops_score']}"
             )
-
+    
             print(
                 f"   Convenience score: "
                 f"{result['convenience_score']}"
             )
-
+    
             print(
                 f"   FINAL SCORE: "
                 f"{result['final_score']}"
             )
-
+    
     else:
-
+    
         print(
             "No scored flight results."
         )
-
+    
     return {
         "results": results,
 
