@@ -27,6 +27,9 @@ from flight_search.results import (
     get_cheapest_by_trip_duration,
 )
 
+from flight_search.scoring import (
+    calculate_final_score,
+)
 
 # ==========================================
 # LOAD ENVIRONMENT VARIABLES
@@ -174,6 +177,7 @@ def search_flexible_dates(
         return {
             "results": [],
             "ranked_results": [],
+            "scored_results": [],
             "cheapest": None,
             "cheapest_by_airport": {},
             "cheapest_by_duration": {},
@@ -593,7 +597,70 @@ def search_flexible_dates(
             results
         )
     )
+    # ==========================================
+    # CALCULATE FLIGHT SCORES
+    # ==========================================
 
+    all_prices = [
+        result["price"]
+        for result in results
+        if result.get("price") is not None
+    ]
+
+    all_durations = [
+        result["duration"]
+        for result in results
+        if result.get("duration") is not None
+    ]
+
+
+    scored_results = []
+
+
+    for result in results:
+
+        flight = result.get(
+            "flight"
+        )
+
+        if not flight:
+            continue
+
+        scores = calculate_final_score(
+
+            flight=flight,
+
+            all_prices=all_prices,
+
+            all_durations=all_durations,
+
+        )
+
+        scored_result = {
+
+            **result,
+
+            **scores,
+
+        }
+
+        scored_results.append(
+            scored_result
+        )
+
+
+    # ==========================================
+    # SORT BY FINAL SCORE
+    # ==========================================
+
+    scored_results.sort(
+
+        key=lambda result:
+            result["final_score"],
+
+        reverse=True,
+
+    )
     statistics = calculate_statistics(
         results=results,
         total_searches=(
@@ -841,15 +908,82 @@ def search_flexible_dates(
     print()
     print("=" * 70)
 
+    print()
+    print("=" * 70)
+    print("SCORED FLIGHT RESULTS")
+    print("=" * 70)
+    
+    if scored_results:
+    
+        for index, result in enumerate(
+            scored_results[:10],
+            start=1,
+        ):
+    
+            print()
+    
+            print(
+                f"{index}. "
+                f"₹{result['price']:,} | "
+                f"{result['departure_airport']} → "
+                f"{result['arrival_airport']}"
+            )
+    
+            print(
+                f"   Dates: "
+                f"{result['departure_date']} → "
+                f"{result['return_date']}"
+            )
+    
+            print(
+                f"   Price score: "
+                f"{result['price_score']}"
+            )
+    
+            print(
+                f"   Duration score: "
+                f"{result['duration_score']}"
+            )
+    
+            print(
+                f"   Stops score: "
+                f"{result['stops_score']}"
+            )
+    
+            print(
+                f"   Convenience score: "
+                f"{result['convenience_score']}"
+            )
+    
+            print(
+                f"   FINAL SCORE: "
+                f"{result['final_score']}"
+            )
+    
+    else:
+    
+        print(
+            "No scored flight results."
+        )
+    
     return {
         "results": results,
-        "ranked_results": ranked_results,
-        "cheapest": cheapest_result,
-        "cheapest_by_airport": (
-            cheapest_by_airport
-        ),
-        "cheapest_by_duration": (
-            cheapest_by_duration
-        ),
-        "statistics": statistics,
+
+        "ranked_results":
+            ranked_results,
+
+        "scored_results":
+            scored_results,
+
+        "cheapest":
+            cheapest_result,
+
+        "cheapest_by_airport":
+            cheapest_by_airport,
+
+        "cheapest_by_duration":
+            cheapest_by_duration,
+
+        "statistics":
+            statistics,
     }
