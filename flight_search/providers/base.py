@@ -15,10 +15,14 @@ class FlightSearchProvider(ABC):
     ) -> Dict[str, Any]:
         raise NotImplementedError
     
-    def search_one_way(
-    self,
-    departure_id: str,
-    arrival_id: str,
-    outbound_date: str,
+    @abstractmethod
+    def search_open_jaw(
+        self,
+        outbound_departure_id: str,
+        outbound_arrival_id: str,
+        return_departure_id: str,
+        return_arrival_id: str,
+        outbound_date: str,
+        return_date: str,
     ) -> Dict[str, Any]:
         raise NotImplementedError
