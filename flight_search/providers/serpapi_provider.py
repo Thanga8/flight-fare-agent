@@ -40,3 +40,21 @@ class SerpApiProvider(FlightSearchProvider):
         }
 
         return self.client.search(params)
+
+    def search_one_way(
+    self,
+    departure_id: str,
+    arrival_id: str,
+    outbound_date: str,
+    ) -> Dict[str, Any]:
+        params = {
+            "engine": "google_flights",
+            "departure_id": departure_id,
+            "arrival_id": arrival_id,
+            "outbound_date": outbound_date,
+            "currency": "INR",
+            "hl": "en",
+            "type": "2",
+        }
+
+        return self.client.search(params)
