@@ -159,7 +159,6 @@ def initialize_database():
 # ==========================================
 
 def create_search_run(
-    searched_at: str,
     origin: str,
     destination: str,
     start_date: str,
@@ -192,10 +191,12 @@ def create_search_run(
                 max_trip_days,
                 api_budget
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (
+                CURRENT_TIMESTAMP,
+                ?, ?, ?, ?, ?, ?, ?
+            )
             """,
             (
-                searched_at,
                 origin,
                 destination,
                 start_date,
