@@ -9,6 +9,9 @@ from telegram.ext import (
 )
 from app import run_search
 
+from flight_search.evaluation.flight_evaluator import (
+    evaluate_flight,
+)
 # ==========================================
 # LOAD ENVIRONMENT VARIABLES
 # ==========================================
@@ -74,6 +77,23 @@ async def search_command(
         report = run_search(
             verbose=False,
         )
+        print()
+        print("=" * 70)
+        print("TELEGRAM REPORT DEBUG")
+        print("=" * 70)
+
+        print("Report keys:")
+        print(report.keys())
+
+        print()
+        print("First result:")
+        print(report.get("results", [None])[0])
+
+        print()
+        print("Cheapest:")
+        print(report.get("cheapest"))
+
+        print("=" * 70)
 
         # ==========================================
         # GET REPORT DATA
@@ -89,10 +109,50 @@ async def search_command(
         )
 
         results = report.get(
-            "results",
+            "scored_results",
             [],
         )
+        
+        # ==========================================
+        # EVALUATE TOP RESULTS
+        # ==========================================
 
+        evaluated_results = []
+
+        for result in results[:5]:
+        
+            try:
+            
+                evaluation = evaluate_flight(
+                    result,
+                )
+
+                evaluated_results.append(
+                    evaluation
+                )
+
+            except Exception as error:
+            
+                print(
+                    "Evaluation error:",
+                    error,
+                )
+        
+        recommendations = []
+
+        for evaluation in evaluated_results:
+        
+            recommendation = (
+                evaluation.get(
+                    "recommendation"
+                )
+            )
+
+            if recommendation:
+            
+                recommendations.append(
+                    recommendation
+                )
         # ==========================================
         # BUILD TELEGRAM MESSAGE
         # ==========================================
@@ -114,49 +174,91 @@ async def search_command(
         )
 
         # ==========================================
-        # CHEAPEST FLIGHT
+        # BEST OVERALL FLIGHT
         # ==========================================
 
-        if cheapest:
+        if evaluated_results:
+        
+            best = evaluated_results[0]
+
+            recommendation = best.get(
+                "recommendation",
+                {},
+            )
+
+            display_rating = recommendation.get(
+                "display_rating",
+                "No Rating",
+            )
+
+            assessment_message = recommendation.get(
+                "assessment_message",
+                "No historical comparison available.",
+            )
+
+            confidence = recommendation.get(
+                "confidence",
+                "NONE",
+            )
+
+            booking_recommendation = recommendation.get(
+                "recommendation",
+                "No recommendation available.",
+            )
 
             message += (
-                "💰 *CHEAPEST FLIGHT*\n\n"
+                "🏆 *BEST OVERALL*\n\n"
                 f"✈️ "
-                f"{cheapest['departure_airport']} "
+                f"{best['departure_airport']} "
                 f"→ "
-                f"{cheapest['arrival_airport']}\n"
+                f"{best['arrival_airport']}\n"
                 f"📅 "
-                f"{cheapest['departure_date']} "
+                f"{best['departure_date']} "
                 f"→ "
-                f"{cheapest['return_date']}\n"
-                f"💵 "
-                f"₹{cheapest['price']:,.0f}\n\n"
+                f"{best['return_date']}\n"
+                f"💰 "
+                f"₹{best['price']:,.0f}\n\n"
+                f"{display_rating}\n\n"
+                f"📉 {assessment_message}\n"
+                f"📊 Confidence: {confidence}\n\n"
+                f"💡 {booking_recommendation}\n\n"
             )
 
         else:
-
+        
             message += (
-                "❌ No priced flights found.\n\n"
+                "❌ No suitable flight results found.\n\n"
             )
 
         # ==========================================
-        # TOP RESULTS
+        # OTHER TOP FLIGHTS
         # ==========================================
 
-        if results:
-
+        if len(evaluated_results) > 1:
+        
             message += (
-                "🏆 *TOP FLIGHTS*\n\n"
+                "💰 *OTHER TOP OPTIONS*\n\n"
             )
 
             for index, result in enumerate(
-                results[:5],
+                evaluated_results[1:5],
                 start=1,
             ):
 
+                recommendation = result.get(
+                    "recommendation",
+                    {},
+                )
+
+                display_rating = recommendation.get(
+                    "display_rating",
+                    "No Rating",
+                )
+
                 message += (
                     f"*{index}.* "
-                    f"₹{result['price']:,.0f} | "
+                    f"₹{result['price']:,.0f}\n"
+                    f"✈️ "
                     f"{result['departure_airport']} "
                     f"→ "
                     f"{result['arrival_airport']}\n"
@@ -165,9 +267,10 @@ async def search_command(
                     f"→ "
                     f"{result['return_date']}\n"
                     f"⭐ Score: "
-                    f"{result.get('final_score', 0):.2f}\n\n"
+                    f"{result.get('final_score', 0):.2f}\n"
+                    f"{display_rating}\n\n"
                 )
-
+                
         # ==========================================
         # SEND REPORT
         # ==========================================
