@@ -279,6 +279,136 @@ def get_latest_search():
 
     return dict(row)
 
+# ==========================================
+# SEARCH ROUTE PRICE HISTORY
+# ==========================================
+
+def get_search_route_price_history(
+    origin,
+    destination,
+    limit=10,
+):
+    """
+    Return the most recent historical flight
+    price observations for a requested search route.
+
+    The requested route is matched against
+    search_runs, allowing city-level destinations
+    such as MOW to contain actual airport results
+    such as SVO and DME.
+
+    Results are ordered from newest search
+    to oldest search.
+    """
+
+    connection = get_connection()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            flight_results.departure_airport,
+            flight_results.arrival_airport,
+            flight_results.departure_date,
+            flight_results.return_date,
+            flight_results.price,
+            flight_results.currency,
+            flight_results.airline,
+            flight_results.final_score,
+            search_runs.searched_at
+
+        FROM flight_results
+
+        JOIN search_runs
+            ON flight_results.search_run_id
+            = search_runs.id
+
+        WHERE
+            search_runs.origin = ?
+            AND search_runs.destination = ?
+
+        ORDER BY
+            search_runs.searched_at DESC,
+            flight_results.price ASC
+
+        LIMIT ?
+        """,
+        (
+            origin,
+            destination,
+            limit,
+        ),
+    )
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    return [
+        dict(row)
+        for row in rows
+    ]
+
+# ==========================================
+# CHEAPEST FARE FOR SEARCH ROUTE
+# ==========================================
+
+def get_cheapest_for_search_route(
+    origin,
+    destination,
+):
+    """
+    Find the cheapest flight ever recorded
+    for a requested search route.
+
+    The requested route is matched against
+    search_runs, allowing city-level destinations
+    such as MOW to contain actual airport results
+    such as SVO and DME.
+    """
+
+    connection = get_connection()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            flight_results.*,
+            search_runs.searched_at,
+            search_runs.origin AS search_origin,
+            search_runs.destination AS search_destination
+
+        FROM flight_results
+
+        JOIN search_runs
+            ON flight_results.search_run_id
+            = search_runs.id
+
+        WHERE
+            search_runs.origin = ?
+            AND search_runs.destination = ?
+
+        ORDER BY
+            flight_results.price ASC
+
+        LIMIT 1
+        """,
+        (
+            origin,
+            destination,
+        ),
+    )
+
+    row = cursor.fetchone()
+
+    connection.close()
+
+    if row is None:
+        return None
+
+    return dict(row)
 
 # ==========================================
 # LATEST FLIGHT RESULTS

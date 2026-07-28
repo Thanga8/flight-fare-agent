@@ -12,6 +12,15 @@ from app import run_search
 from flight_search.evaluation.flight_evaluator import (
     evaluate_flight,
 )
+
+from search_history import (
+    get_latest_search,
+    get_latest_results,
+    get_cheapest_for_search_route,
+    get_search_route_price_history,
+)
+
+
 # ==========================================
 # LOAD ENVIRONMENT VARIABLES
 # ==========================================
@@ -40,19 +49,44 @@ async def start_command(
 # ==========================================
 # /HELP COMMAND
 # ==========================================
+async def help_command(update, context):
+    """
+    Show available Telegram bot commands.
+    """
 
-async def help_command(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-    await update.message.reply_text(
-        "✈️ Flight Fare Assistant\n\n"
+    message = (
+        "✈️ FLIGHT FARE AGENT\n\n"
+
         "Available commands:\n\n"
-        "/start - Start the bot\n"
-        "/help - Show available commands\n"
-        "/search - Search for current flight fares"
+
+        "🔎 /search\n"
+        "Run a fresh live flight fare search.\n"
+        "This calls the flight search API and evaluates "
+        "the latest fares.\n\n"
+
+        "📊 /latest\n"
+        "Show the results from your most recent search "
+        "without running a new search.\n\n"
+
+        "🏆 /best\n"
+        "Show the cheapest fare ever recorded for "
+        "your latest searched route, including when "
+        "the fare was observed.\n\n"
+
+        "📈 /history\n"
+        "Show recent historical fare observations "
+        "for your latest searched route.\n\n"
+
+        "ℹ️ /help\n"
+        "Show this help message.\n\n"
+
+        "🏠 /start\n"
+        "Show the welcome message and available features."
     )
 
+    await update.message.reply_text(
+        message
+    )
 # ==========================================
 # /SEARCH COMMAND
 # ==========================================
@@ -270,7 +304,7 @@ async def search_command(
                     f"{result.get('final_score', 0):.2f}\n"
                     f"{display_rating}\n\n"
                 )
-                
+
         # ==========================================
         # SEND REPORT
         # ==========================================
@@ -291,6 +325,337 @@ async def search_command(
             "running the flight search.\n\n"
             f"Error: {error}"
         )
+
+async def latest_command(update, context):
+    """
+    Show the results from the most recent completed search.
+
+    This command reads from SQLite only.
+    It does not trigger a new flight API search.
+    """
+
+    latest_search = get_latest_search()
+
+    # ==========================================
+    # NO SEARCH HISTORY
+    # ==========================================
+
+    if latest_search is None:
+
+        await update.message.reply_text(
+            "📭 No previous searches found.\n\n"
+            "Run /search to perform your first flight search."
+        )
+
+        return
+
+    # ==========================================
+    # GET LATEST RESULTS
+    # ==========================================
+
+    latest_results = get_latest_results()
+
+    # ==========================================
+    # NO RESULTS
+    # ==========================================
+
+    if not latest_results:
+
+        await update.message.reply_text(
+            "📭 The latest search did not contain "
+            "any saved flight results."
+        )
+
+        return
+
+    # ==========================================
+    # SEARCH DETAILS
+    # ==========================================
+
+    origin = latest_search["origin"]
+
+    destination = latest_search["destination"]
+
+    searched_at = latest_search["searched_at"]
+
+    # ==========================================
+    # FIND CHEAPEST RESULT
+    # ==========================================
+
+    cheapest = min(
+        latest_results,
+        key=lambda result: result["price"],
+    )
+
+    # ==========================================
+    # BUILD MESSAGE
+    # ==========================================
+
+    message = (
+        "✈️ LAST SEARCH\n\n"
+
+        f"🛫 Route: "
+        f"{origin} → {destination}\n"
+
+        f"🕒 Searched at: "
+        f"{searched_at}\n\n"
+
+        "💰 CHEAPEST FLIGHT\n\n"
+
+        f"✈️ "
+        f"{cheapest['departure_airport']} → "
+        f"{cheapest['arrival_airport']}\n"
+
+        f"📅 "
+        f"{cheapest['departure_date']} → "
+        f"{cheapest['return_date']}\n"
+
+        f"💵 "
+        f"₹{cheapest['price']:,}\n\n"
+
+        "📊 SEARCH SUMMARY\n\n"
+
+        f"• API searches: "
+        f"{latest_search.get('total_searches', 0)}\n"
+
+        f"• Priced results: "
+        f"{latest_search.get('priced_results', 0)}\n"
+
+        f"• Total saved results: "
+        f"{len(latest_results)}"
+    )
+
+    await update.message.reply_text(
+        message
+    )
+
+# ==========================================
+# BEST result from history
+# ==========================================
+async def best_command(update, context):
+    """
+    Show the cheapest flight ever recorded
+    for the route used in the latest search.
+
+    This command reads historical data from SQLite.
+    It does not trigger a new flight API search.
+    """
+
+    # ==========================================
+    # GET LATEST SEARCH
+    # ==========================================
+
+    latest_search = get_latest_search()
+
+    if latest_search is None:
+
+        await update.message.reply_text(
+            "📭 No previous searches found.\n\n"
+            "Run /search to perform your first flight search."
+        )
+
+        return
+
+    # ==========================================
+    # GET ROUTE FROM LATEST SEARCH
+    # ==========================================
+
+    origin = latest_search["origin"]
+
+    destination = latest_search["destination"]
+
+    # ==========================================
+    # GET HISTORICAL CHEAPEST FARE
+    # ==========================================
+
+    best_fare = get_cheapest_for_search_route(
+        origin=origin,
+        destination=destination,
+    )
+
+    # ==========================================
+    # NO HISTORICAL DATA
+    # ==========================================
+
+    if best_fare is None:
+
+        await update.message.reply_text(
+            f"📭 No historical flight data found for "
+            f"{origin} → {destination}.\n\n"
+            "Run /search to collect flight prices."
+        )
+
+        return
+
+    # ==========================================
+    # BUILD RESPONSE
+    # ==========================================
+
+    message = (
+        "🏆 BEST FARE RECORDED\n\n"
+
+        f"✈️ Route: "
+        f"{origin} → {destination}\n\n"
+
+        f"✈️ Flight: "
+        f"{best_fare['departure_airport']} → "
+        f"{best_fare['arrival_airport']}\n"
+
+        f"📅 "
+        f"{best_fare['departure_date']} → "
+        f"{best_fare['return_date']}\n\n"
+
+        f"💵 Cheapest recorded fare: "
+        f"₹{best_fare['price']:,}\n\n"
+
+        f"🕒 Recorded during search: "
+        f"{best_fare['searched_at']}"
+    )
+
+    await update.message.reply_text(
+        message
+    )
+# ==========================================
+#  HISTORY
+# ==========================================
+async def history_command(update, context):
+    """
+    Show recent historical fare observations
+    for the route used in the latest search.
+
+    This command reads from SQLite only.
+    It does not trigger a new flight API search.
+    """
+
+    # ==========================================
+    # GET LATEST SEARCH
+    # ==========================================
+
+    latest_search = get_latest_search()
+
+    if latest_search is None:
+
+        await update.message.reply_text(
+            "📭 No previous searches found.\n\n"
+            "Run /search to perform your first flight search."
+        )
+
+        return
+
+    # ==========================================
+    # GET SEARCH ROUTE
+    # ==========================================
+
+    origin = latest_search["origin"]
+
+    destination = latest_search["destination"]
+
+    # ==========================================
+    # GET HISTORICAL PRICE DATA
+    # ==========================================
+
+    history = get_search_route_price_history(
+        origin=origin,
+        destination=destination,
+        limit=10,
+    )
+
+    # ==========================================
+    # NO HISTORY
+    # ==========================================
+
+    if not history:
+
+        await update.message.reply_text(
+            f"📭 No historical fare data found "
+            f"for {origin} → {destination}."
+        )
+
+        return
+
+    # ==========================================
+    # BUILD HEADER
+    # ==========================================
+
+    message_parts = [
+
+        "📈 FARE HISTORY",
+
+        "",
+
+        f"✈️ Route: "
+        f"{origin} → {destination}",
+
+        "",
+
+        "Recent fare observations:",
+    ]
+
+    # ==========================================
+    # ADD HISTORICAL RESULTS
+    # ==========================================
+
+    for index, result in enumerate(
+        history,
+        start=1,
+    ):
+
+        departure_airport = (
+            result["departure_airport"]
+        )
+
+        arrival_airport = (
+            result["arrival_airport"]
+        )
+
+        departure_date = (
+            result["departure_date"]
+        )
+
+        return_date = (
+            result["return_date"]
+        )
+
+        price = result["price"]
+
+        searched_at = (
+            result["searched_at"]
+        )
+
+        message_parts.extend(
+            [
+
+                "",
+
+                f"{index}. "
+                f"₹{price:,}",
+
+                f"   ✈️ "
+                f"{departure_airport} → "
+                f"{arrival_airport}",
+
+                f"   📅 "
+                f"{departure_date} → "
+                f"{return_date}",
+
+                f"   🕒 "
+                f"{searched_at}",
+
+            ]
+        )
+
+    # ==========================================
+    # SEND TELEGRAM MESSAGE
+    # ==========================================
+
+    message = "\n".join(
+        message_parts
+    )
+
+    await update.message.reply_text(
+        message
+    )
+
 # ==========================================
 # MAIN
 # ==========================================
@@ -327,6 +692,24 @@ def main():
         CommandHandler(
             "search",
             search_command,
+        )
+    )
+    application.add_handler(
+        CommandHandler(
+            "latest",
+            latest_command,
+        )
+    )
+    application.add_handler(
+        CommandHandler(
+            "best",
+            best_command,
+        )
+    )
+    application.add_handler(
+        CommandHandler(
+            "history",
+            history_command,
         )
     )
     print(
