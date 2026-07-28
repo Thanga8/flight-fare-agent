@@ -111,6 +111,15 @@ async def search_command(
         report = run_search(
             verbose=False,
         )
+        price_comparison = report.get(
+            "price_comparison"
+        )
+        price_movement_text = (
+            format_price_movement(
+                price_comparison
+            )
+        )
+        
         print()
         print("=" * 70)
         print("TELEGRAM REPORT DEBUG")
@@ -304,7 +313,18 @@ async def search_command(
                     f"{result.get('final_score', 0):.2f}\n"
                     f"{display_rating}\n\n"
                 )
-
+            
+        # ==========================================
+        # PRICE COMPARISON WITH THE RECENT
+        # ==========================================
+        message += (
+                    "\n\n"
+                    + format_price_movement(
+                        report.get(
+                            "price_comparison"
+                        )
+                    )
+                )
         # ==========================================
         # SEND REPORT
         # ==========================================
@@ -656,6 +676,205 @@ async def history_command(update, context):
         message
     )
 
+def format_price_movement(
+    price_comparison,
+):
+    """
+    Format current fare movement compared
+    with the immediately previous search.
+
+    The Telegram bot uses Markdown formatting,
+    so this function intentionally uses *bold*
+    instead of HTML <b> tags.
+    """
+
+    # ==========================================
+    # NO COMPARISON DATA
+    # ==========================================
+
+    if not price_comparison:
+
+        return (
+            "📊 *PRICE MOVEMENT*\n\n"
+            "ℹ️ No price comparison available."
+        )
+
+    # ==========================================
+    # NO PREVIOUS SEARCH
+    # ==========================================
+
+    if not price_comparison.get(
+        "comparison_available",
+        False,
+    ):
+
+        return (
+            "📊 *PRICE MOVEMENT*\n\n"
+            "ℹ️ No previous search available.\n\n"
+            "Your next search will establish "
+            "the comparison baseline."
+        )
+
+    # ==========================================
+    # EXTRACT VALUES
+    # ==========================================
+
+    current_price = (
+        price_comparison.get(
+            "current_price"
+        )
+    )
+
+    previous_price = (
+        price_comparison.get(
+            "previous_price"
+        )
+    )
+
+    difference = (
+        price_comparison.get(
+            "price_difference"
+        )
+    )
+
+    difference_percent = (
+        price_comparison.get(
+            "price_difference_percent"
+        )
+    )
+
+    direction = (
+        price_comparison.get(
+            "price_direction"
+        )
+    )
+
+    previous_searched_at = (
+        price_comparison.get(
+            "previous_searched_at"
+        )
+    )
+
+    # ==========================================
+    # SAFETY CHECK
+    # ==========================================
+
+    if (
+        current_price is None
+        or previous_price is None
+        or difference is None
+        or difference_percent is None
+    ):
+
+        return (
+            "📊 *PRICE MOVEMENT*\n\n"
+            "ℹ️ Unable to determine price movement."
+        )
+
+    # ==========================================
+    # FORMAT VALUES
+    # ==========================================
+
+    current_price_text = (
+        f"₹{current_price:,.0f}"
+    )
+
+    previous_price_text = (
+        f"₹{previous_price:,.0f}"
+    )
+
+    difference_text = (
+        f"₹{abs(difference):,.0f}"
+    )
+
+    percentage_text = (
+        f"{abs(difference_percent):.2f}%"
+    )
+
+    # ==========================================
+    # CHEAPER
+    # ==========================================
+
+    if direction == "CHEAPER":
+
+        return (
+            "📊 *PRICE MOVEMENT*\n\n"
+
+            "🟢 *Fare is cheaper "
+            "than your previous search!*\n\n"
+
+            f"Current cheapest: "
+            f"*{current_price_text}*\n"
+
+            f"Previous search: "
+            f"*{previous_price_text}*\n\n"
+
+            f"📉 Saved: "
+            f"*{difference_text}* "
+            f"({percentage_text} cheaper)\n\n"
+
+            f"🕒 Previous search:\n"
+            f"{previous_searched_at}"
+        )
+
+    # ==========================================
+    # MORE EXPENSIVE
+    # ==========================================
+
+    if direction == "EXPENSIVE":
+
+        return (
+            "📊 *PRICE MOVEMENT*\n\n"
+
+            "🔴 *Fare increased "
+            "since your previous search.*\n\n"
+
+            f"Current cheapest: "
+            f"*{current_price_text}*\n"
+
+            f"Previous search: "
+            f"*{previous_price_text}*\n\n"
+
+            f"📈 Increased by: "
+            f"*{difference_text}* "
+            f"({percentage_text} higher)\n\n"
+
+            f"🕒 Previous search:\n"
+            f"{previous_searched_at}"
+        )
+
+    # ==========================================
+    # UNCHANGED
+    # ==========================================
+
+    if direction == "UNCHANGED":
+
+        return (
+            "📊 *PRICE MOVEMENT*\n\n"
+
+            "🟡 *Fare unchanged*\n\n"
+
+            f"Current cheapest: "
+            f"*{current_price_text}*\n"
+
+            f"Previous search: "
+            f"*{previous_price_text}*\n\n"
+
+            "Change: "
+            "*₹0 (0.00%)*\n\n"
+
+            f"🕒 Previous search:\n"
+            f"{previous_searched_at}"
+        )
+
+    # ==========================================
+    # UNKNOWN DIRECTION
+    # ==========================================
+
+    return (
+        "📊 *PRICE MOVEMENT*\n\n"
+        "ℹ️ Unable to determine price movement."
+    )
 # ==========================================
 # MAIN
 # ==========================================

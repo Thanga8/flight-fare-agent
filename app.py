@@ -9,6 +9,10 @@ from flight_search.search import search_flexible_dates
 
 from flight_search.logging import logger
 
+from search_history import (
+    compare_with_previous_search,
+)
+
 from flight_search.config import *
 # ==========================================
 # HELPER FUNCTIONS
@@ -148,6 +152,30 @@ def run_search(
     cheapest_by_duration = report.get("cheapest_by_duration", {})
 
     # ==========================================
+    # PREVIOUS SEARCH PRICE COMPARISON
+    # ==========================================
+
+    price_comparison = None
+
+    if cheapest:
+
+        price_comparison = (
+            compare_with_previous_search(
+
+                origin=ORIGIN,
+
+                destination=DESTINATION,
+
+                current_price=cheapest["price"],
+
+            )
+        )
+
+    # Add comparison to report
+    report["price_comparison"] = (
+        price_comparison
+    )
+        # ==========================================
     # SELECT RECOMMENDATIONS
     # ==========================================
 
@@ -294,6 +322,68 @@ def run_search(
         best_alternative,
     )
 
+    # ==========================================
+    # PREVIOUS SEARCH PRICE COMPARISON
+    # ==========================================
+    
+    logger.info()
+    logger.info("=" * 70)
+    logger.info("PREVIOUS SEARCH PRICE COMPARISON")
+    logger.info("=" * 70)
+    
+    if price_comparison:
+    
+        if price_comparison[
+            "comparison_available"
+        ]:
+    
+            logger.info(
+                f"Current cheapest price: "
+                f"₹{price_comparison['current_price']:,}"
+            )
+    
+            logger.info(
+                f"Previous cheapest price: "
+                f"₹{price_comparison['previous_price']:,}"
+            )
+    
+            logger.info(
+                f"Price difference: "
+                f"₹{price_comparison['price_difference']:,}"
+            )
+    
+            logger.info(
+                f"Percentage change: "
+                f"{price_comparison['price_difference_percent']}%"
+            )
+    
+            logger.info(
+                f"Price direction: "
+                f"{price_comparison['price_direction']}"
+            )
+    
+            logger.info(
+                f"Previous search: "
+                f"{price_comparison['previous_searched_at']}"
+            )
+    
+        else:
+        
+            logger.info(
+                "No previous search available."
+            )
+    
+            logger.info(
+                "Price comparison will be "
+                "available after the next search."
+            )
+    
+    else:
+    
+        logger.info(
+            "No cheapest flight available "
+            "for comparison."
+        )
     # ==========================================
     # TOP SCORED FLIGHTS
     # ==========================================

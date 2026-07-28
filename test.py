@@ -1,35 +1,25 @@
-from app import run_search
-
-from flight_search.reporting.report_builder import (
-    build_console_report,
+from search_history import (
+    compare_with_previous_search,
 )
 
-report = run_search(False)
 
-console_report = build_console_report(
-    report
+result = compare_with_previous_search(
+    origin="HYD",
+    destination="MOW",
+    current_price=63610,
 )
 
-print()
 
+print()
 print("=" * 70)
-print("REPORT BUILDER TEST")
+print("PREVIOUS SEARCH PRICE COMPARISON")
 print("=" * 70)
 
-print()
+for key, value in result.items():
 
-print(console_report.keys())
-
-print()
-
-print(
-    len(
-        console_report["results"]
+    print(
+        f"{key}: {value}"
     )
-)
 
 print()
-
-print(
-    console_report["results"][0]["recommendation"]
-)
+print("=" * 70)

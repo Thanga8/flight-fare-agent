@@ -349,6 +349,207 @@ def get_search_route_price_history(
         dict(row)
         for row in rows
     ]
+# ==========================================
+# PREVIOUS SEARCH CHEAPEST PRICE
+# ==========================================
+
+def get_previous_search_cheapest_price(
+    origin,
+    destination,
+):
+    """
+    Return the cheapest recorded fare from
+    the immediately previous search for the
+    same search route.
+
+    The current/latest search is excluded.
+
+    Returns None if there is no previous search.
+    """
+
+    connection = get_connection()
+
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            sr.id AS search_run_id,
+            sr.searched_at,
+            MIN(fr.price) AS cheapest_price
+
+        FROM search_runs sr
+
+        JOIN flight_results fr
+            ON fr.search_run_id = sr.id
+
+        WHERE
+            sr.origin = ?
+            AND sr.destination = ?
+
+        GROUP BY
+            sr.id,
+            sr.searched_at
+
+        ORDER BY
+            sr.searched_at DESC
+
+        LIMIT 2
+        """,
+        (
+            origin,
+            destination,
+        ),
+    )
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    # ==========================================
+    # NEED AT LEAST TWO SEARCHES
+    # ==========================================
+
+    if len(rows) < 2:
+        return None
+
+    # First row = current/latest search
+    # Second row = previous search
+
+    previous_search = rows[1]
+
+    return {
+        "search_run_id":
+            previous_search["search_run_id"],
+
+        "searched_at":
+            previous_search["searched_at"],
+
+        "cheapest_price":
+            previous_search["cheapest_price"],
+    }
+
+# ==========================================
+# COMPARE WITH PREVIOUS SEARCH
+# ==========================================
+
+def compare_with_previous_search(
+    origin,
+    destination,
+    current_price,
+):
+    """
+    Compare the current cheapest fare with
+    the cheapest fare from the immediately
+    previous search for the same route.
+    """
+
+    previous_search = (
+        get_previous_search_cheapest_price(
+            origin=origin,
+            destination=destination,
+        )
+    )
+
+    # ==========================================
+    # NO PREVIOUS SEARCH
+    # ==========================================
+
+    if previous_search is None:
+
+        return {
+            "comparison_available": False,
+
+            "current_price":
+                current_price,
+
+            "previous_price":
+                None,
+
+            "price_difference":
+                None,
+
+            "price_difference_percent":
+                None,
+
+            "price_direction":
+                "NO_PREVIOUS_SEARCH",
+
+            "previous_searched_at":
+                None,
+
+            "previous_search_run_id":
+                None,
+        }
+
+    previous_price = (
+        previous_search["cheapest_price"]
+    )
+
+    # ==========================================
+    # CALCULATE PRICE DIFFERENCE
+    # ==========================================
+
+    price_difference = (
+        current_price
+        - previous_price
+    )
+
+    price_difference_percent = (
+        price_difference
+        / previous_price
+        * 100
+    )
+
+    # ==========================================
+    # DETERMINE PRICE DIRECTION
+    # ==========================================
+
+    if current_price < previous_price:
+
+        price_direction = "CHEAPER"
+
+    elif current_price > previous_price:
+
+        price_direction = "EXPENSIVE"
+
+    else:
+
+        price_direction = "UNCHANGED"
+
+    # ==========================================
+    # RETURN COMPARISON
+    # ==========================================
+
+    return {
+
+        "comparison_available":
+            True,
+
+        "current_price":
+            current_price,
+
+        "previous_price":
+            previous_price,
+
+        "price_difference":
+            price_difference,
+
+        "price_difference_percent":
+            round(
+                price_difference_percent,
+                2,
+            ),
+
+        "price_direction":
+            price_direction,
+
+        "previous_searched_at":
+            previous_search["searched_at"],
+
+        "previous_search_run_id":
+            previous_search["search_run_id"],
+    }
 
 # ==========================================
 # CHEAPEST FARE FOR SEARCH ROUTE
