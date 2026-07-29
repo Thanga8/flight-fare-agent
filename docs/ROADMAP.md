@@ -74,6 +74,8 @@ Cloud-Based Telegram Alerts
 
 ⏳ Next implementation phase.
 
+> Current branch: implemented and pending release validation.
+
 ## Goal
 
 Use historical fare data to determine which search combinations should receive API budget priority.
@@ -176,6 +178,17 @@ Potential inputs:
 The first implementation should remain simple.
 
 Do not build an overly complex ML model.
+
+## Current Implementation
+
+Phase 1 now reads existing priced historical observations before any live
+provider request. It ranks candidates using comparable-history scope,
+historical average price, observation count, and recency, while reserving
+explicit exploration capacity for lower-evidence candidates.
+
+The existing Phase 2 adaptive planner remains unchanged and continues to use
+the current search run's results. No database migration is required for this
+first version; per-candidate no-price rates remain a future enhancement.
 
 ---
 

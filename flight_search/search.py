@@ -15,8 +15,8 @@ from flight_search.planner import (
     create_search_plan,
 )
 from flight_search.planner import (
-    create_initial_search_plan,
     create_adaptive_search_plan,
+    create_historical_initial_search_plan,
 )
 from flight_search.airports import (
     get_airports,
@@ -27,6 +27,7 @@ from flight_search.results import (
 from utils.dates import (
     generate_date_combinations,
 )
+from search_history import get_historical_search_priorities
 
 from flight_search.results import (
     rank_results,
@@ -242,6 +243,26 @@ def search_flexible_dates(
             },
         }
 
+    # Build the complete candidate set before any live request.  Historical
+    # data informs Phase 1 only; Phase 2 still adapts to this run's results.
+    candidate_searches = []
+    for departure_airport in get_airports(departure_id):
+        for arrival_airport in get_airports(arrival_id):
+            for combination in date_combinations:
+                candidate_searches.append(
+                    {
+                        "departure_airport": departure_airport,
+                        "arrival_airport": arrival_airport,
+                        **combination,
+                    }
+                )
+
+    historical_candidates = get_historical_search_priorities(
+        origin=departure_id,
+        destination=arrival_id,
+        date_combinations=candidate_searches,
+    )
+
     # ==========================================
     # CREATE DATABASE SEARCH RUN
     # ==========================================
@@ -279,16 +300,9 @@ def search_flexible_dates(
     # CREATE PHASE 1 PLAN
     # ==========================================
 
-    exploration_plan = (
-        create_initial_search_plan(
-            departure_id=departure_id,
-            arrival_id=arrival_id,
-            start_date=start_date,
-            end_date=end_date,
-            min_trip_days=min_trip_days,
-            max_trip_days=max_trip_days,
-            max_api_calls=exploration_budget,
-        )
+    exploration_plan = create_historical_initial_search_plan(
+        historical_candidates=historical_candidates,
+        max_api_calls=exploration_budget,
     )
 
     if not exploration_plan:

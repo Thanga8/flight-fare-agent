@@ -8,6 +8,114 @@ from utils.dates import (
 )
 
 
+_HISTORY_SCOPE_WEIGHTS = {
+    "exact_dates": 1.0,
+    "nearby_dates": 0.85,
+    "same_month": 0.70,
+    "airport_pair": 0.50,
+    "none": 0.0,
+}
+
+
+def _historical_priority_score(candidate):
+    """Return a simple, explainable score for historical evidence."""
+
+    average_price = candidate.get("historical_average_price")
+    observation_count = candidate.get("historical_observation_count", 0)
+
+    if not average_price or observation_count <= 0:
+        return 0.0
+
+    confidence = min(observation_count, 5) / 5
+    recency_days = candidate.get("historical_recency_days")
+    recency = 1.0 if recency_days is None else max(0.25, 1 - recency_days / 365)
+    scope = _HISTORY_SCOPE_WEIGHTS.get(
+        candidate.get("historical_comparison_level"), 0.0
+    )
+
+    return (100000 / average_price) * confidence * recency * scope
+
+
+def create_historical_initial_search_plan(
+    historical_candidates,
+    max_api_calls,
+    exploration_reserve=1,
+):
+    """Plan Phase 1 using history while retaining explicit exploration.
+
+    The best-supported candidates receive the non-exploration allocation.
+    At least one lower-evidence candidate is retained whenever the budget and
+    candidate pool permit it.  No API or database work occurs here.
+    """
+
+    if max_api_calls <= 0 or not historical_candidates:
+        return []
+
+    candidates = []
+    for candidate in historical_candidates:
+        item = dict(candidate)
+        item["historical_priority_score"] = _historical_priority_score(item)
+        candidates.append(item)
+
+    target = min(max_api_calls, len(candidates))
+    reserve = min(exploration_reserve, target)
+    if target == 1:
+        reserve = 1
+
+    ranked = sorted(
+        candidates,
+        key=lambda item: (
+            -item["historical_priority_score"],
+            item["departure_airport"],
+            item["arrival_airport"],
+            item["departure_date"],
+            item["return_date"],
+        ),
+    )
+    supported_candidates = [
+        item for item in ranked
+        if item["historical_priority_score"] > 0
+    ]
+    # Do not label an arbitrary no-history candidate as historical merely
+    # because budget remains after reserving exploration.
+    historical_budget = min(target - reserve, len(supported_candidates))
+    selected = ranked[:historical_budget]
+    selected_keys = {
+        (item["departure_airport"], item["arrival_airport"], item["departure_date"], item["return_date"])
+        for item in selected
+    }
+
+    exploration_pool = [
+        item for item in reversed(ranked)
+        if (item["departure_airport"], item["arrival_airport"], item["departure_date"], item["return_date"])
+        not in selected_keys
+    ]
+    selected.extend(exploration_pool[:target - historical_budget])
+
+    plan = []
+    for item in selected:
+        is_exploration = item in exploration_pool[:target - historical_budget]
+        plan.append(
+            {
+                "departure_airport": item["departure_airport"],
+                "arrival_airport": item["arrival_airport"],
+                "departure_date": item["departure_date"],
+                "return_date": item["return_date"],
+                "trip_days": item["trip_days"],
+                "planning_priority": "exploration" if is_exploration else "historical",
+                "planning_reason": (
+                    "Reserved exploration candidate."
+                    if is_exploration
+                    else f"Historical {item['historical_comparison_level']} evidence."
+                ),
+                "historical_observation_count": item["historical_observation_count"],
+                "historical_average_price": item["historical_average_price"],
+            }
+        )
+
+    return plan
+
+
 def create_search_plan(
     departure_id: str,
     arrival_id: str,

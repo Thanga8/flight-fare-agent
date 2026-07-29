@@ -1,6 +1,127 @@
 import sqlite3
+from datetime import date, datetime, timedelta
 
 from flight_search.database.db import get_connection
+
+
+def get_historical_search_priorities(
+    origin,
+    destination,
+    date_combinations,
+    reference_date=None,
+):
+    """Return read-only historical evidence for candidate searches.
+
+    Each candidate is compared against the same airport pair using the
+    existing hierarchy: exact dates, nearby dates with a similar duration,
+    the same month with a similar duration, then airport-pair history.
+    This function deliberately does not create a search run or modify data.
+    """
+
+    if not date_combinations:
+        return []
+
+    if reference_date is None:
+        reference_day = date.today()
+    elif isinstance(reference_date, str):
+        reference_day = date.fromisoformat(reference_date)
+    else:
+        reference_day = reference_date
+
+    connection = get_connection()
+
+    try:
+        rows = connection.execute(
+            """
+            SELECT
+                fr.departure_airport,
+                fr.arrival_airport,
+                fr.departure_date,
+                fr.return_date,
+                fr.price,
+                sr.searched_at
+            FROM flight_results fr
+            JOIN search_runs sr ON fr.search_run_id = sr.id
+            WHERE sr.origin = ? AND sr.destination = ?
+            """,
+            (origin, destination),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    history_by_pair = {}
+
+    for row in rows:
+        item = dict(row)
+        pair = (item["departure_airport"], item["arrival_airport"])
+        item["_departure_day"] = date.fromisoformat(item["departure_date"])
+        item["_trip_days"] = (
+            date.fromisoformat(item["return_date"])
+            - item["_departure_day"]
+        ).days
+        history_by_pair.setdefault(pair, []).append(item)
+
+    priorities = []
+
+    for candidate in date_combinations:
+        departure_day = date.fromisoformat(candidate["departure_date"])
+        trip_days = candidate["trip_days"]
+        pair_history = history_by_pair.get(
+            (candidate["departure_airport"], candidate["arrival_airport"]),
+            [],
+        )
+
+        exact = [
+            item for item in pair_history
+            if item["departure_date"] == candidate["departure_date"]
+            and item["return_date"] == candidate["return_date"]
+        ]
+        nearby = [
+            item for item in pair_history
+            if abs((item["_departure_day"] - departure_day).days) <= 3
+            and abs(item["_trip_days"] - trip_days) <= 1
+        ]
+        same_month = [
+            item for item in pair_history
+            if item["_departure_day"].month == departure_day.month
+            and abs(item["_trip_days"] - trip_days) <= 1
+        ]
+
+        if exact:
+            comparison_level, matches = "exact_dates", exact
+        elif nearby:
+            comparison_level, matches = "nearby_dates", nearby
+        elif same_month:
+            comparison_level, matches = "same_month", same_month
+        elif pair_history:
+            comparison_level, matches = "airport_pair", pair_history
+        else:
+            comparison_level, matches = "none", []
+
+        prices = [item["price"] for item in matches]
+        observed_dates = [
+            datetime.fromisoformat(item["searched_at"]).date()
+            for item in matches
+        ]
+        most_recent = max(observed_dates) if observed_dates else None
+
+        priorities.append(
+            {
+                **candidate,
+                "historical_comparison_level": comparison_level,
+                "historical_observation_count": len(prices),
+                "historical_average_price": (
+                    round(sum(prices) / len(prices), 2) if prices else None
+                ),
+                "historical_low_price": min(prices) if prices else None,
+                "historical_recency_days": (
+                    max(0, (reference_day - most_recent).days)
+                    if most_recent else None
+                ),
+            }
+        )
+
+    return priorities
 
 
 # ==========================================
