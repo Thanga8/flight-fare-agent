@@ -1,3 +1,31 @@
+def extract_cheapest_flight(
+    results,
+    departure_date,
+    return_date,
+):
+    """Extract the cheapest priced provider flight into the shared shape."""
+
+    all_flights = (
+        results.get("best_flights", [])
+        + results.get("other_flights", [])
+    )
+    valid_flights = [
+        flight for flight in all_flights
+        if flight.get("price") is not None
+    ]
+    if not valid_flights:
+        return None
+
+    cheapest = min(valid_flights, key=lambda flight: flight["price"])
+    return {
+        "departure_date": departure_date,
+        "return_date": return_date,
+        "price": cheapest["price"],
+        "duration": cheapest.get("total_duration"),
+        "flight": cheapest,
+    }
+
+
 def rank_results(
     results,
     top_n=10,

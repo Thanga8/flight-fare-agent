@@ -30,6 +30,7 @@ from utils.dates import (
 from search_history import get_historical_search_priorities
 
 from flight_search.results import (
+    extract_cheapest_flight,
     rank_results,
     get_cheapest_result,
     calculate_statistics,
@@ -84,73 +85,6 @@ def search_flights(
         outbound_date=outbound_date,
         return_date=return_date,
     )
-
-
-# ==========================================
-# EXTRACT CHEAPEST FLIGHT
-# ==========================================
-
-def extract_cheapest_flight(
-    results,
-    departure_date,
-    return_date,
-):
-    """
-    Extract the cheapest flight from
-    SerpApi results.
-    """
-
-    best_flights = results.get(
-        "best_flights",
-        []
-    )
-
-    other_flights = results.get(
-        "other_flights",
-        []
-    )
-
-    all_flights = (
-        best_flights
-        + other_flights
-    )
-
-    if not all_flights:
-        return None
-
-    # Filter out results without prices
-    valid_flights = [
-        flight
-        for flight in all_flights
-        if flight.get("price") is not None
-    ]
-
-    if not valid_flights:
-        return None
-
-    cheapest = min(
-        valid_flights,
-        key=lambda flight: flight["price"]
-    )
-
-    return {
-        "departure_date":
-            departure_date,
-
-        "return_date":
-            return_date,
-
-        "price":
-            cheapest["price"],
-
-        "duration":
-            cheapest.get(
-                "total_duration"
-            ),
-
-        "flight":
-            cheapest,
-    }
 
 
 # ==========================================

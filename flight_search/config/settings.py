@@ -15,6 +15,18 @@ MAX_SEARCHES = 4
 
 
 # ==========================================
+# MULTI-LEG ITINERARY CONFIGURATION
+# ==========================================
+
+DOMESTIC_ORIGIN = "MOW"
+DOMESTIC_DESTINATION = "MMK"
+DOMESTIC_TRIP_DAYS = 4
+RUB_TO_INR = 1.16
+MULTI_LEG_SERPAPI_BUDGET = 20
+MULTI_LEG_TRAVELPAYOUTS_BUDGET = 10
+
+
+# ==========================================
 # REPORTING
 # ==========================================
 
