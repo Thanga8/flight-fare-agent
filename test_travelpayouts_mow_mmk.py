@@ -9,12 +9,32 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 
 API_URL = "https://api.travelpayouts.com/aviasales/v3/prices_for_dates"
+
+
+def get_api_token():
+    """Read the token from the environment or the project's local .env file."""
+
+    token = os.getenv("TRAVELPAYOUTS_API_TOKEN")
+    if token:
+        return token
+
+    env_path = Path(__file__).with_name(".env")
+    if not env_path.is_file():
+        return None
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        key, separator, value = line.partition("=")
+        if separator and key.strip() == "TRAVELPAYOUTS_API_TOKEN":
+            return value.strip().strip("\"'") or None
+
+    return None
 
 
 def fetch_mow_to_mmk_fares(token, departure_date, limit=30):
@@ -75,7 +95,7 @@ def main():
     )
     args = parser.parse_args()
 
-    token = os.getenv("TRAVELPAYOUTS_API_TOKEN")
+    token = get_api_token()
     if not token:
         print("TRAVELPAYOUTS_API_TOKEN is not set; no request was made.")
         print(
@@ -105,7 +125,7 @@ def main():
     if isinstance(offers, dict):
         offers = list(offers.values())
 
-    print(f"MOW → MMK cached fare probe for {args.departure}")
+    print(f"MOW -> MMK cached fare probe for {args.departure}")
     print(f"Offers returned: {len(offers)}")
 
     if not offers:

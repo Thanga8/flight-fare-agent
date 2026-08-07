@@ -288,9 +288,14 @@ duration, and offer expiry. It requires a Travelpayouts API token but not
 approval for the separate real-time Search API.
 
 `test_travelpayouts_mow_mmk.py` is an isolated opt-in probe for MOW → MMK.
-It does not touch SQLite or the main provider flow. A live verification remains
-pending until a token is configured and the returned domestic fare coverage is
-reviewed.
+It does not touch SQLite or the main provider flow. Its live verification uses
+a configured token and the returned domestic fare coverage is reviewed before
+integration.
+
+Verification completed on 2026-08-07: the Data API returned a cached MOW → MMK
+Pobeda (`DP`) offer for 2026-09-07 (flight DP6855, 7,116 RUB). This confirms
+Russian domestic coverage, while the cached-data limitation still requires it
+to remain a complementary provider rather than a SerpApi replacement.
 
 ---
 
