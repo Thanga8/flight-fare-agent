@@ -113,6 +113,24 @@ class MultiLegTests(unittest.TestCase):
         airports = [item["international_arrival_airport"] for item in report["itineraries"]]
         self.assertEqual("SVO", airports[0])
 
+    def test_only_ten_cheapest_domestic_combinations_advance(self):
+        report = search_multi_leg_itineraries(
+            start_date="2027-01-20",
+            end_date="2027-02-13",
+            domestic_provider=FakeDomesticProvider(),
+            international_provider=FakeInternationalProvider(),
+            travelpayouts_budget=19,
+            serpapi_budget=0,
+            historical_priority_provider=historical_priorities,
+        )
+
+        self.assertEqual(19, report["domestic_combinations_found"])
+        self.assertEqual(10, report["domestic_combinations_selected"])
+        # The first domestic date has only one valid HYD departure date;
+        # the remaining nine have two, across three Moscow airports.
+        self.assertEqual(57, report["international_searches_available"])
+        self.assertEqual(0, report["international_searches_planned"])
+
 
 if __name__ == "__main__":
     unittest.main()

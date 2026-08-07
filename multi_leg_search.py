@@ -24,14 +24,27 @@ def main():
         action="store_true",
         help="Allow live Travelpayouts and SerpApi requests.",
     )
+    parser.add_argument(
+        "--serpapi-budget",
+        type=int,
+        default=MULTI_LEG_SERPAPI_BUDGET,
+        help="SerpApi cap for this run (maximum 20).",
+    )
+    parser.add_argument(
+        "--show-all",
+        action="store_true",
+        help="Print every complete itinerary rather than only the top five.",
+    )
     args = parser.parse_args()
+    if not 0 <= args.serpapi_budget <= MULTI_LEG_SERPAPI_BUDGET:
+        parser.error("--serpapi-budget must be between 0 and 20")
 
     candidates = create_multi_leg_candidates(START_DATE, END_DATE)
     print("MULTI-LEG ITINERARY PLAN")
     print(f"International window: {START_DATE} to {END_DATE}")
     print(f"Valid domestic 4-day candidates: {len(candidates)}")
     print(f"Travelpayouts cap: {MULTI_LEG_TRAVELPAYOUTS_BUDGET}")
-    print(f"SerpApi cap: {MULTI_LEG_SERPAPI_BUDGET}")
+    print(f"SerpApi cap: {args.serpapi_budget}")
     print(f"Conversion: 1 RUB = {RUB_TO_INR} INR")
 
     if not args.live:
@@ -47,7 +60,7 @@ def main():
         domestic_provider=TravelpayoutsProvider(),
         international_provider=SerpApiProvider(),
         travelpayouts_budget=MULTI_LEG_TRAVELPAYOUTS_BUDGET,
-        serpapi_budget=MULTI_LEG_SERPAPI_BUDGET,
+        serpapi_budget=args.serpapi_budget,
         rub_to_inr=RUB_TO_INR,
     )
 
@@ -56,9 +69,29 @@ def main():
         f"{report['travelpayouts_budget']}, SerpApi {report['serpapi_calls']}/"
         f"{report['serpapi_budget']}"
     )
+    print(
+        f"Eligible domestic 4-day combinations found: "
+        f"{report['domestic_combinations_found']}"
+    )
+    print(
+        f"Cheapest domestic combinations advanced: "
+        f"{report['domestic_combinations_selected']}"
+    )
+    print(
+        f"Airport/date international candidates available: "
+        f"{report['international_searches_available']}"
+    )
+    print(
+        f"International searches selected within the SerpApi budget: "
+        f"{report['international_searches_planned']}"
+    )
     print(f"Complete itineraries: {len(report['itineraries'])}")
 
-    for index, itinerary in enumerate(report["itineraries"][:5], start=1):
+    itineraries_to_show = (
+        report["itineraries"]
+        if args.show_all else report["itineraries"][:5]
+    )
+    for index, itinerary in enumerate(itineraries_to_show, start=1):
         domestic = itinerary["domestic"]
         international = itinerary["international"]
         print()

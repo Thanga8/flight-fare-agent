@@ -74,8 +74,17 @@ class TravelpayoutsProvider:
         except (HTTPError, URLError, TimeoutError) as error:
             raise RuntimeError(f"Travelpayouts request failed: {error}") from error
 
+    def search_round_trip_month(self, departure_id, arrival_id, month):
+        """Return cached round trips with a departure in the given month."""
+        return self.search_round_trip(
+            departure_id=departure_id,
+            arrival_id=arrival_id,
+            outbound_date=month,
+            return_date=month,
+        )
+
     @staticmethod
-    def extract_cheapest_offer(payload):
+    def extract_offers(payload):
         if not payload.get("success"):
             return None
 
@@ -87,20 +96,18 @@ class TravelpayoutsProvider:
             offer for offer in offers
             if offer.get("price", offer.get("value")) is not None
         ]
-        if not priced_offers:
-            return None
+        return [{
+            "price": offer.get("price", offer.get("value")),
+            "currency": offer.get("currency", "RUB"),
+            "airline": offer.get("airline"),
+            "flight_number": offer.get("flight_number"),
+            "departure_at": offer.get("departure_at", offer.get("depart_date")),
+            "return_at": offer.get("return_at", offer.get("return_date")),
+            "duration": offer.get("duration"),
+            "raw": offer,
+        } for offer in priced_offers]
 
-        cheapest = min(
-            priced_offers,
-            key=lambda offer: offer.get("price", offer.get("value")),
-        )
-        return {
-            "price": cheapest.get("price", cheapest.get("value")),
-            "currency": cheapest.get("currency", "RUB"),
-            "airline": cheapest.get("airline"),
-            "flight_number": cheapest.get("flight_number"),
-            "departure_at": cheapest.get("departure_at", cheapest.get("depart_date")),
-            "return_at": cheapest.get("return_at", cheapest.get("return_date")),
-            "duration": cheapest.get("duration"),
-            "raw": cheapest,
-        }
+    @classmethod
+    def extract_cheapest_offer(cls, payload):
+        offers = cls.extract_offers(payload)
+        return min(offers, key=lambda offer: offer["price"]) if offers else None

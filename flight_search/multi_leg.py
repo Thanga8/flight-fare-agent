@@ -14,6 +14,7 @@ from utils.dates import sample_date_combinations
 RUB_TO_INR = 1.16
 MAX_SERPAPI_CALLS = 20
 MAX_TRAVELPAYOUTS_CALLS = 10
+DOMESTIC_COMBINATIONS_TO_ADVANCE = 10
 
 
 def create_multi_leg_candidates(start_date, end_date, domestic_trip_days=4):
@@ -113,6 +114,7 @@ def search_multi_leg_itineraries(
     international_provider,
     serpapi_budget=MAX_SERPAPI_CALLS,
     travelpayouts_budget=MAX_TRAVELPAYOUTS_CALLS,
+    domestic_combination_limit=DOMESTIC_COMBINATIONS_TO_ADVANCE,
     rub_to_inr=RUB_TO_INR,
     historical_priority_provider=get_historical_search_priorities,
 ):
@@ -123,13 +125,49 @@ def search_multi_leg_itineraries(
     live results and the combined ranking are validated.
     """
 
-    if serpapi_budget < 0 or travelpayouts_budget < 0:
+    if (
+        serpapi_budget < 0
+        or travelpayouts_budget < 0
+        or domestic_combination_limit < 0
+    ):
         raise ValueError("Provider budgets cannot be negative.")
 
     candidates = create_multi_leg_candidates(start_date, end_date)
     domestic_plan = _sample_candidates(candidates, travelpayouts_budget)
     domestic_results = []
     travelpayouts_calls = 0
+
+    candidates_by_dates = {
+        (item["domestic_departure_date"], item["domestic_return_date"]): item
+        for item in candidates
+    }
+
+    if hasattr(domestic_provider, "search_round_trip_month"):
+        domestic_plan = []
+        month_pairs = sorted({
+            (item["domestic_departure_date"][:7], item["domestic_return_date"][:7])
+            for item in candidates
+        })
+        for departure_month, return_month in month_pairs[:travelpayouts_budget]:
+            payload = domestic_provider.search_round_trip(
+                departure_id="MOW",
+                arrival_id="MMK",
+                outbound_date=departure_month,
+                return_date=return_month,
+            )
+            travelpayouts_calls += 1
+            for offer in domestic_provider.extract_offers(payload):
+                departure_at = offer.get("departure_at")
+                return_at = offer.get("return_at")
+                candidate = candidates_by_dates.get(
+                    (departure_at[:10], return_at[:10])
+                ) if departure_at and return_at else None
+                if candidate:
+                    domestic_results.append({
+                        **candidate,
+                        "domestic": offer,
+                        "domestic_price_inr": round(offer["price"] * rub_to_inr, 2),
+                    })
 
     for candidate in domestic_plan:
         payload = domestic_provider.search_round_trip(
@@ -156,6 +194,8 @@ def search_multi_leg_itineraries(
             )
 
     domestic_results.sort(key=lambda item: item["domestic_price_inr"])
+    domestic_combinations_found = len(domestic_results)
+    domestic_results = domestic_results[:domestic_combination_limit]
     airport_candidates = _build_international_airport_candidates(domestic_results)
     historical_candidates = historical_priority_provider(
         origin="HYD",
@@ -230,6 +270,10 @@ def search_multi_leg_itineraries(
         "itineraries": itineraries,
         "candidate_count": len(candidates),
         "domestic_candidates_searched": len(domestic_plan),
+        "domestic_combinations_found": domestic_combinations_found,
+        "domestic_combinations_selected": len(domestic_results),
+        "international_searches_available": len(airport_candidates),
+        "international_searches_planned": len(international_plan),
         "travelpayouts_calls": travelpayouts_calls,
         "serpapi_calls": serpapi_calls,
         "travelpayouts_budget": travelpayouts_budget,
