@@ -280,6 +280,18 @@ The provider must offer enough incremental value to justify:
 * Additional API costs.
 * Additional maintenance.
 
+## Candidate Under Evaluation
+
+Travelpayouts / Aviasales Data API is the first Phase 6 candidate. It exposes
+cached fares for specific dates, including price, airline, flight number,
+duration, and offer expiry. It requires a Travelpayouts API token but not
+approval for the separate real-time Search API.
+
+`test_travelpayouts_mow_mmk.py` is an isolated opt-in probe for MOW → MMK.
+It does not touch SQLite or the main provider flow. A live verification remains
+pending until a token is configured and the returned domestic fare coverage is
+reviewed.
+
 ---
 
 # Phase 7 — Google Flights Price Insights / Market Intelligence
