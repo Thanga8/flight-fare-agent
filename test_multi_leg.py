@@ -38,6 +38,20 @@ class FakeInternationalProvider:
         }
 
 
+def historical_priorities(*, date_combinations, **_):
+    """Make SVO historically strongest while preserving an exploration option."""
+    return [
+        {
+            **candidate,
+            "historical_comparison_level": "exact_dates",
+            "historical_observation_count": 5 if candidate["arrival_airport"] == "SVO" else 1,
+            "historical_average_price": 50000 if candidate["arrival_airport"] == "SVO" else 90000,
+            "historical_recency_days": 1,
+        }
+        for candidate in date_combinations
+    ]
+
+
 class MultiLegTests(unittest.TestCase):
     def test_candidates_enforce_buffers_and_four_day_domestic_trip(self):
         candidates = create_multi_leg_candidates("2027-01-20", "2027-02-13")
@@ -61,6 +75,7 @@ class MultiLegTests(unittest.TestCase):
             international_provider=international,
             travelpayouts_budget=3,
             serpapi_budget=2,
+            historical_priority_provider=historical_priorities,
         )
 
         self.assertEqual(3, report["travelpayouts_calls"])
@@ -79,9 +94,24 @@ class MultiLegTests(unittest.TestCase):
             international_provider=FakeInternationalProvider(late_arrival=True),
             travelpayouts_budget=1,
             serpapi_budget=1,
+            historical_priority_provider=historical_priorities,
         )
 
         self.assertEqual([], report["itineraries"])
+
+    def test_historical_priority_selects_svo_before_other_airports(self):
+        report = search_multi_leg_itineraries(
+            start_date="2027-01-20",
+            end_date="2027-02-13",
+            domestic_provider=FakeDomesticProvider(),
+            international_provider=FakeInternationalProvider(),
+            travelpayouts_budget=2,
+            serpapi_budget=3,
+            historical_priority_provider=historical_priorities,
+        )
+
+        airports = [item["international_arrival_airport"] for item in report["itineraries"]]
+        self.assertEqual("SVO", airports[0])
 
 
 if __name__ == "__main__":

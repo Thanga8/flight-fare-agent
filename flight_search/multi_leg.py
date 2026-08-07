@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from flight_search.airports import get_airports
+from flight_search.planner import create_historical_initial_search_plan
 from flight_search.results import extract_cheapest_flight
+from search_history import get_historical_search_priorities
 from utils.dates import sample_date_combinations
 
 
@@ -78,6 +81,30 @@ def _arrival_date_from_flight(flight):
     return arrival_time[:10]
 
 
+def _build_international_airport_candidates(domestic_results):
+    """Expand each domestic date into airport-specific international searches."""
+
+    airport_candidates = []
+    for domestic_result in domestic_results:
+        for outbound_date in domestic_result["international_outbound_dates"]:
+            return_date = domestic_result["international_return_date"]
+            trip_days = (
+                date.fromisoformat(return_date) - date.fromisoformat(outbound_date)
+            ).days
+            for arrival_airport in get_airports("MOW"):
+                airport_candidates.append(
+                    {
+                        "departure_airport": "HYD",
+                        "arrival_airport": arrival_airport,
+                        "departure_date": outbound_date,
+                        "return_date": return_date,
+                        "trip_days": trip_days,
+                        "domestic_result": domestic_result,
+                    }
+                )
+    return airport_candidates
+
+
 def search_multi_leg_itineraries(
     *,
     start_date,
@@ -87,6 +114,7 @@ def search_multi_leg_itineraries(
     serpapi_budget=MAX_SERPAPI_CALLS,
     travelpayouts_budget=MAX_TRAVELPAYOUTS_CALLS,
     rub_to_inr=RUB_TO_INR,
+    historical_priority_provider=get_historical_search_priorities,
 ):
     """Search four-leg itineraries while enforcing separate provider budgets.
 
@@ -128,55 +156,74 @@ def search_multi_leg_itineraries(
             )
 
     domestic_results.sort(key=lambda item: item["domestic_price_inr"])
-    selected_for_international = domestic_results[:serpapi_budget]
+    airport_candidates = _build_international_airport_candidates(domestic_results)
+    historical_candidates = historical_priority_provider(
+        origin="HYD",
+        destination="MOW",
+        date_combinations=airport_candidates,
+    )
+    international_plan = create_historical_initial_search_plan(
+        historical_candidates=historical_candidates,
+        max_api_calls=serpapi_budget,
+    )
+
+    domestic_by_search_key = {
+        (
+            item["departure_airport"],
+            item["arrival_airport"],
+            item["departure_date"],
+            item["return_date"],
+        ): item["domestic_result"]
+        for item in historical_candidates
+    }
     itineraries = []
     serpapi_calls = 0
 
-    for candidate in selected_for_international:
-        for outbound_date in candidate["international_outbound_dates"]:
-            if serpapi_calls >= serpapi_budget:
-                break
+    for search in international_plan:
+        search_key = (
+            search["departure_airport"],
+            search["arrival_airport"],
+            search["departure_date"],
+            search["return_date"],
+        )
+        domestic_result = domestic_by_search_key[search_key]
+        payload = international_provider.search_round_trip(
+            departure_id=search["departure_airport"],
+            arrival_id=search["arrival_airport"],
+            outbound_date=search["departure_date"],
+            return_date=search["return_date"],
+        )
+        serpapi_calls += 1
+        international = extract_cheapest_flight(
+            payload,
+            search["departure_date"],
+            search["return_date"],
+        )
+        if not international:
+            continue
 
-            payload = international_provider.search_round_trip(
-                departure_id="HYD",
-                arrival_id="MOW",
-                outbound_date=outbound_date,
-                return_date=candidate["international_return_date"],
-            )
-            serpapi_calls += 1
-            international = extract_cheapest_flight(
-                payload,
-                outbound_date,
-                candidate["international_return_date"],
-            )
-            if not international:
-                continue
+        arrival_date = _arrival_date_from_flight(international["flight"])
+        if (
+            arrival_date is None
+            or arrival_date > domestic_result["international_arrival_target"]
+        ):
+            continue
 
-            arrival_date = _arrival_date_from_flight(international["flight"])
-            # A combined itinerary is valid only if its actual inbound flight
-            # reaches Moscow on or before the protected buffer day.
-            if (
-                arrival_date is None
-                or arrival_date > candidate["international_arrival_target"]
-            ):
-                continue
-
-            itineraries.append(
-                {
-                    **candidate,
-                    "international": international,
-                    "international_arrival_date": arrival_date,
+        itineraries.append(
+            {
+                **domestic_result,
+                "international_arrival_airport": search["arrival_airport"],
+                "international_planning_priority": search["planning_priority"],
+                "international": international,
+                "international_arrival_date": arrival_date,
                 "international_arrival_verified": True,
-                    "rub_to_inr": rub_to_inr,
-                    "total_price_inr": round(
-                        candidate["domestic_price_inr"] + international["price"],
-                        2,
-                    ),
-                }
-            )
-
-        if serpapi_calls >= serpapi_budget:
-            break
+                "rub_to_inr": rub_to_inr,
+                "total_price_inr": round(
+                    domestic_result["domestic_price_inr"] + international["price"],
+                    2,
+                ),
+            }
+        )
 
     itineraries.sort(key=lambda item: item["total_price_inr"])
     return {
