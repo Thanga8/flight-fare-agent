@@ -19,7 +19,11 @@ from search_history import (
     get_cheapest_for_search_route,
     get_search_route_price_history,
 )
+from telegram_bot.multi_leg import multi_search_command
 
+from flight_search.google_flights_url import (
+    build_google_flights_url,
+)
 
 # ==========================================
 # LOAD ENVIRONMENT VARIABLES
@@ -64,6 +68,10 @@ async def help_command(update, context):
         "This calls the flight search API and evaluates "
         "the latest fares.\n\n"
 
+        "🧭 /multi_search\n"
+        "Search the combined HYD → MOW → MMK → MOW → HYD itinerary.\n"
+        "This can use up to 10 Travelpayouts and 20 SerpApi calls.\n\n"
+
         "📊 /latest\n"
         "Show the results from your most recent search "
         "without running a new search.\n\n"
@@ -87,6 +95,172 @@ async def help_command(update, context):
     await update.message.reply_text(
         message
     )
+
+def format_itinerary_details(result: dict) -> str:
+    """
+    Format outbound and return flight segments as
+    route + corresponding airlines.
+
+    Example:
+
+    ✈️ HYD → BAH → SVO
+       Gulf Air → Gulf Air
+
+    ✈️ SVO → BAH → HYD
+       Gulf Air → Gulf Air
+
+    The split is based on the final destination airport,
+    not segment dates, because an outbound journey may
+    cross midnight.
+    """
+
+    flight = result.get("flight", {})
+    segments = flight.get("flights", [])
+
+    if not segments:
+        return ""
+
+    origin = result.get(
+        "departure_airport"
+    )
+
+    destination = result.get(
+        "arrival_airport"
+    )
+
+    if not origin or not destination:
+        return ""
+
+    # ------------------------------------------
+    # Find the outbound / return split
+    # ------------------------------------------
+
+    outbound_segments = []
+    return_segments = []
+
+    outbound_complete = False
+
+    for segment in segments:
+
+        if not outbound_complete:
+
+            outbound_segments.append(
+                segment
+            )
+
+            arrival_airport = (
+                segment
+                .get("arrival_airport", {})
+                .get("id")
+            )
+
+            # Once we reach the final destination,
+            # the outbound journey is complete.
+            if arrival_airport == destination:
+                outbound_complete = True
+
+        else:
+
+            return_segments.append(
+                segment
+            )
+
+    # ------------------------------------------
+    # Helper to format one journey
+    # ------------------------------------------
+
+    def format_journey(
+        journey_segments: list[dict],
+    ) -> str:
+
+        if not journey_segments:
+            return ""
+
+        airports = []
+        airlines = []
+
+        # --------------------------------------
+        # First departure airport
+        # --------------------------------------
+
+        first_departure = (
+            journey_segments[0]
+            .get("departure_airport", {})
+            .get("id")
+        )
+
+        if first_departure:
+            airports.append(
+                first_departure
+            )
+
+        # --------------------------------------
+        # Add arrival airports and airlines
+        # --------------------------------------
+
+        for segment in journey_segments:
+
+            arrival = (
+                segment
+                .get("arrival_airport", {})
+                .get("id")
+            )
+
+            if arrival:
+                airports.append(
+                    arrival
+                )
+
+            airline = segment.get(
+                "airline"
+            )
+
+            if airline:
+                airlines.append(
+                    airline
+                )
+
+        route = " → ".join(
+            airports
+        )
+
+        airline_line = " → ".join(
+            airlines
+        )
+
+        return (
+            f"✈️ {route}\n"
+            f"   {airline_line}"
+        )
+
+    # ------------------------------------------
+    # Build final output
+    # ------------------------------------------
+
+    lines = []
+
+    outbound_text = format_journey(
+        outbound_segments
+    )
+
+    if outbound_text:
+        lines.append(
+            outbound_text
+        )
+
+    return_text = format_journey(
+        return_segments
+    )
+
+    if return_text:
+        lines.append(
+            return_text
+        )
+
+    return "\n\n".join(
+        lines
+    )
+
 # ==========================================
 # /SEARCH COMMAND
 # ==========================================
@@ -120,24 +294,6 @@ async def search_command(
             )
         )
         
-        print()
-        print("=" * 70)
-        print("TELEGRAM REPORT DEBUG")
-        print("=" * 70)
-
-        print("Report keys:")
-        print(report.keys())
-
-        print()
-        print("First result:")
-        print(report.get("results", [None])[0])
-
-        print()
-        print("Cheapest:")
-        print(report.get("cheapest"))
-
-        print("=" * 70)
-
         # ==========================================
         # GET REPORT DATA
         # ==========================================
@@ -224,9 +380,20 @@ async def search_command(
         
             best = evaluated_results[0]
 
+            itinerary_details = format_itinerary_details(best)
+
             recommendation = best.get(
                 "recommendation",
                 {},
+            )
+
+            google_flights_url = (
+                build_google_flights_url(
+                    origin=best["departure_airport"],
+                    destination=best["arrival_airport"],
+                    departure_date=best["departure_date"],
+                    return_date=best["return_date"],
+                )
             )
 
             display_rating = recommendation.get(
@@ -251,10 +418,7 @@ async def search_command(
 
             message += (
                 "🏆 *BEST OVERALL*\n\n"
-                f"✈️ "
-                f"{best['departure_airport']} "
-                f"→ "
-                f"{best['arrival_airport']}\n"
+                f"{itinerary_details}\n\n"
                 f"📅 "
                 f"{best['departure_date']} "
                 f"→ "
@@ -265,6 +429,8 @@ async def search_command(
                 f"📉 {assessment_message}\n"
                 f"📊 Confidence: {confidence}\n\n"
                 f"💡 {booking_recommendation}\n\n"
+                f"🔗 [View on Google Flights]"
+                f"({google_flights_url})\n\n"
             )
 
         else:
@@ -911,6 +1077,13 @@ def main():
         CommandHandler(
             "search",
             search_command,
+        )
+    )
+
+    application.add_handler(
+        CommandHandler(
+            "multi_search",
+            multi_search_command,
         )
     )
     application.add_handler(

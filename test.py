@@ -1,25 +1,18 @@
-from search_history import (
-    compare_with_previous_search,
+from flight_search.google_flights_url import (
+    build_google_flights_url,
 )
 
 
-result = compare_with_previous_search(
+url = build_google_flights_url(
     origin="HYD",
-    destination="MOW",
-    current_price=63610,
+    destination="SVO",
+    departure_date="2027-01-20",
+    return_date="2027-01-25",
 )
 
-
 print()
 print("=" * 70)
-print("PREVIOUS SEARCH PRICE COMPARISON")
+print("GOOGLE FLIGHTS URL TEST")
 print("=" * 70)
-
-for key, value in result.items():
-
-    print(
-        f"{key}: {value}"
-    )
-
-print()
+print(url)
 print("=" * 70)
