@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Fare Path · Results{% endblock %}
+{% block content %}
+<section class="results-hero">
+  <p class="eyebrow">SEARCH COMPLETE</p>
+  <h1>Promising paths to Murmansk.</h1>
+  <p>{{ start_date }} to {{ end_date }} · 1 RUB = ₹{{ report.rub_to_inr }}</p>
+  <a class="back-link" href="{{ url_for('index') }}">← New search</a>
+</section>
+<section class="metrics" aria-label="Search usage">
+  <div><strong>{{ report.domestic_combinations_found }}</strong><span>domestic fares found</span></div>
+  <div><strong>{{ report.domestic_combinations_selected }}</strong><span>cheapest dates advanced</span></div>
+  <div><strong>{{ report.serpapi_calls }}/{{ report.serpapi_budget }}</strong><span>SerpApi calls used</span></div>
+</section>
+<section class="results-list">
+  <div class="section-heading"><h2>Complete itineraries</h2><p>Sorted by combined price.</p></div>
+  {% for itinerary in report.itineraries %}
+  <article class="itinerary-card {% if loop.first %}best{% endif %}">
+    <div class="card-top"><span class="rank">{{ '%02d'|format(loop.index) }}</span><p class="total">₹{{ '{:,.2f}'.format(itinerary.total_price_inr) }}</p></div>
+    <div class="legs">
+      <div><span class="leg-label">INTERNATIONAL</span><strong>HYD → {{ itinerary.international_arrival_airport }}</strong><p>{{ itinerary.international.departure_date }} → {{ itinerary.international.return_date }}</p><small>₹{{ '{:,.0f}'.format(itinerary.international.price) }}</small></div>
+      <div><span class="leg-label">DOMESTIC · 4 DAYS</span><strong>MOW → MMK → MOW</strong><p>{{ itinerary.domestic_departure_date }} → {{ itinerary.domestic_return_date }}</p><small>RUB {{ '{:,.0f}'.format(itinerary.domestic.price) }} · ₹{{ '{:,.2f}'.format(itinerary.domestic_price_inr) }}</small></div>
+    </div>
+    <div class="card-actions">
+      <a href="{{ itinerary.booking_links.international }}" target="_blank" rel="noopener">Check international availability ↗</a>
+      <a href="{{ itinerary.booking_links.domestic }}" target="_blank" rel="noopener">Check domestic availability ↗</a>
+    </div>
+  </article>
+  {% else %}
+  <div class="empty-state">No complete itineraries met the Moscow-arrival buffer. Try a broader date window.</div>
+  {% endfor %}
+</section>
+<aside class="price-note"><strong>About these prices</strong><p>International prices come from the live SerpApi search. Domestic MOW–MMK fares come from Travelpayouts’ cached data and may change before checkout. The links open a fresh Google Flights search; they are not exact-fare booking links.</p></aside>
+{% endblock %}

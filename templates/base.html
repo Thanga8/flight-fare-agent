@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#0a1d37">
+    <title>{% block title %}Fare Path{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="{{ url_for('index') }}" aria-label="Fare Path home">
+        <span class="brand-mark">✦</span> Fare Path
+      </a>
+      <span class="header-note">Flexible fares, deliberate searches</span>
+    </header>
+    <main>{% block content %}{% endblock %}</main>
+    <footer>Personal flight-search assistant · Prices and availability can change.</footer>
+  </body>
+</html>

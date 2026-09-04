@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Fare Path · Find your best route{% endblock %}
+{% block content %}
+<section class="hero">
+  <p class="eyebrow">HYDERABAD · MOSCOW · MURMANSK</p>
+  <h1>Plan the path,<br><em>not just the flight.</em></h1>
+  <p class="hero-copy">Find a low-cost HYD → Moscow → Murmansk itinerary with a four-day Arctic stay. We rank domestic dates first, then spend limited international-search credits only where they matter.</p>
+</section>
+
+<section class="search-panel" aria-labelledby="search-title">
+  <div>
+    <p class="eyebrow">MULTI-LEG SEARCH</p>
+    <h2 id="search-title">Choose your flexible window</h2>
+  </div>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="post" action="{{ url_for('search') }}">
+    <div class="route-strip" aria-label="Itinerary route">
+      <span>HYD</span><i>→</i><span>MOW</span><i>→</i><span>MMK</span><i>→</i><span>MOW</span><i>→</i><span>HYD</span>
+    </div>
+    <div class="date-grid">
+      <label>Earliest international departure<input type="date" name="start_date" value="{{ start_date }}" required></label>
+      <label>Latest international return<input type="date" name="end_date" value="{{ end_date }}" required></label>
+    </div>
+    <div class="info-box"><strong>Search budget:</strong> up to 10 cached domestic-fare requests and {{ serpapi_budget }} SerpApi international searches. A search runs only after you press the button.</div>
+    <button type="submit">Search possible itineraries <span>→</span></button>
+  </form>
+</section>
+
+<section class="principles">
+  <article><span>01</span><h3>Rank domestic first</h3><p>Cached MOW–MMK round-trip fares identify the ten cheapest date combinations.</p></article>
+  <article><span>02</span><h3>Use credits carefully</h3><p>Historical search priorities select the most promising Moscow airport and date combinations.</p></article>
+  <article><span>03</span><h3>Verify before booking</h3><p>Domestic fares are cached observations. Final fares and availability are always checked live.</p></article>
+</section>
+{% endblock %}
