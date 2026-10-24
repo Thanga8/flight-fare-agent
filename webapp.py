@@ -159,23 +159,54 @@ def search():
 
 
 def _plot_points(points):
-    """Map real timestamp/price samples to an SVG without synthesizing data."""
+    """Map original timestamp/price samples to an SVG with labeled date and fare axes."""
     if not points:
-        return {"polyline": "", "points": []}
+        return {"polyline": "", "points": [], "x_ticks": [], "y_ticks": []}
+
+    points = sorted(points, key=lambda point: point["timestamp"])
     times = [point["timestamp"] for point in points]
     prices = [point["price"] for point in points]
     min_time, max_time = min(times), max(times)
-    min_price, max_price = min(prices), max(prices)
+    raw_min_price, raw_max_price = min(prices), max(prices)
+
+    # Add a little vertical breathing room without inventing any observations.
+    if raw_min_price == raw_max_price:
+        padding = max(abs(raw_min_price) * 0.05, 1)
+    else:
+        padding = (raw_max_price - raw_min_price) * 0.08
+    scale_min = max(0, raw_min_price - padding)
+    scale_max = raw_max_price + padding
+    if scale_max <= scale_min:
+        scale_max = scale_min + 1
+
+    left, right, top, bottom = 76, 580, 24, 190
     plotted = []
     for point in points:
-        x = 300 if max_time == min_time else 24 + (point["timestamp"] - min_time) * 552 / (max_time - min_time)
-        y = 100 if max_price == min_price else 180 - (point["price"] - min_price) * 160 / (max_price - min_price)
+        x = left if max_time == min_time else left + (point["timestamp"] - min_time) * (right - left) / (max_time - min_time)
+        y = bottom - (point["price"] - scale_min) * (bottom - top) / (scale_max - scale_min)
         plotted.append({"x": round(x, 2), "y": round(y, 2), "label": point["label"]})
+
+    tick_times = sorted({times[0], times[len(times) // 2], times[-1]})
+    x_ticks = [
+        {
+            "x": round(left if max_time == min_time else left + (timestamp - min_time) * (right - left) / (max_time - min_time), 2),
+            "label": datetime.fromtimestamp(timestamp, timezone.utc).strftime("%d %b %y"),
+        }
+        for timestamp in tick_times
+    ]
+    y_ticks = []
+    for index in range(5):
+        value = scale_min + (scale_max - scale_min) * index / 4
+        y = bottom - (value - scale_min) * (bottom - top) / (scale_max - scale_min)
+        label = f"{value:,.0f}" if abs(value - round(value)) < 0.01 else f"{value:,.1f}"
+        y_ticks.append({"y": round(y, 2), "value": value, "label": label})
+
     return {
         "polyline": " ".join(f"{point['x']},{point['y']}" for point in plotted),
         "points": plotted,
+        "x_ticks": x_ticks,
+        "y_ticks": y_ticks,
     }
-
 
 def _history_groups(rows):
     grouped = {}
