@@ -48,6 +48,27 @@ class PlotPointsTests(unittest.TestCase):
         self.assertLess(chart["y_ticks"][0]["value"], 37000)
         self.assertGreater(chart["y_ticks"][-1]["value"], 63000)
 
+    def test_x_axis_dates_are_formatted_from_utc_timestamps(self):
+        chart = _plot_points([
+            {"timestamp": 1790899200, "price": 37000, "label": "sample"},
+        ])
+
+        self.assertEqual(["02 Oct 26"], [tick["label"] for tick in chart["x_ticks"]])
+
+    def test_single_identical_price_observations_remain_visible_and_in_range(self):
+        chart = _plot_points([
+            {"timestamp": 1790899200, "price": 50000, "label": "first"},
+            {"timestamp": 1790899200, "price": 50000, "label": "second"},
+        ])
+
+        self.assertEqual(2, len(chart["points"]))
+        self.assertEqual(chart["points"][0]["x"], chart["points"][1]["x"])
+        self.assertEqual(chart["points"][0]["y"], chart["points"][1]["y"])
+        self.assertTrue(all(24 <= point["y"] <= 190 for point in chart["points"]))
+        self.assertEqual(5, len(chart["y_ticks"]))
+        self.assertLess(chart["y_ticks"][0]["value"], 50000)
+        self.assertGreater(chart["y_ticks"][-1]["value"], 50000)
+
 
 class SearchInsightReportTests(unittest.TestCase):
     def test_original_provider_insights_are_exposed_per_leg_and_date(self):

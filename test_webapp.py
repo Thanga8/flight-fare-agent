@@ -21,23 +21,30 @@ class WebAppTests(unittest.TestCase):
         )
 
         self.assertEqual(400, response.status_code)
-        self.assertIn(b"end date must be after", response.data)
+        self.assertIn(b"end date must be on or after", response.data)
 
     def test_availability_links_include_the_specific_dates(self):
         links = _booking_links(
             {
-                "international_arrival_airport": "SVO",
-                "international": {
+                "leg1": {
+                    "arrival_airport": "SVO",
                     "departure_date": "2027-01-24",
-                    "return_date": "2027-01-30",
                 },
-                "domestic_departure_date": "2027-01-25",
-                "domestic_return_date": "2027-01-29",
-            }
+                "leg2": {
+                    "departure_airport": "SVO",
+                    "departure_date": "2027-01-31",
+                },
+            },
+            {
+                "leg1_origin": "HYD",
+                "leg1_destination": "PAR",
+                "leg2_destination": "HYD",
+            },
         )
 
-        self.assertIn("HYD", links["international"])
-        self.assertIn("2027-01-25", links["domestic"])
+        self.assertIn("HYD", links["leg1"])
+        self.assertIn("2027-01-24", links["leg1"])
+        self.assertIn("2027-01-31", links["leg2"])
 
 
 if __name__ == "__main__":
