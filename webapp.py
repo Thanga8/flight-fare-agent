@@ -182,14 +182,14 @@ def _plot_points(points):
     left, right, top, bottom = 76, 580, 24, 190
     plotted = []
     for point in points:
-        x = left if max_time == min_time else left + (point["timestamp"] - min_time) * (right - left) / (max_time - min_time)
+        x = (left + right) / 2 if max_time == min_time else left + (point["timestamp"] - min_time) * (right - left) / (max_time - min_time)
         y = bottom - (point["price"] - scale_min) * (bottom - top) / (scale_max - scale_min)
         plotted.append({"x": round(x, 2), "y": round(y, 2), "label": point["label"]})
 
     tick_times = sorted({times[0], times[len(times) // 2], times[-1]})
     x_ticks = [
         {
-            "x": round(left if max_time == min_time else left + (timestamp - min_time) * (right - left) / (max_time - min_time), 2),
+            "x": round((left + right) / 2 if max_time == min_time else left + (timestamp - min_time) * (right - left) / (max_time - min_time), 2),
             "label": datetime.fromtimestamp(timestamp, timezone.utc).strftime("%d %b %y"),
         }
         for timestamp in tick_times
