@@ -1,3 +1,6 @@
 .env
 __pycache__/
 *.pyc
+data/flights.db
+data/cache/
+data/raw_searches/
