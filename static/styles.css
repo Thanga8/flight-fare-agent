@@ -21,7 +21,28 @@ body { margin:0; font-family:Inter, ui-sans-serif, system-ui, -apple-system, Bli
 .mode-fields { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:20px; }
 .search-panel .info-box { border-top:1px solid #3a4e68; padding-top:16px; }
 .itinerary-card .price-note { margin:25px 0 22px; padding:15px 0 0; }
+.primary-nav { display:flex; align-items:center; gap:20px; }
+.primary-nav-link { color:var(--muted); text-decoration:none; font-size:.84rem; font-weight:700; padding:8px 0; border-bottom:2px solid transparent; }
+.primary-nav-link:hover,.primary-nav-link.active { color:var(--ink); border-bottom-color:var(--accent); }
+.primary-nav-link:focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
+.history-chart-wrap { margin:22px 0; }
+.history-chart { display:block; width:100%; max-height:230px; background:#fffdf8; border:1px solid var(--line); }
+.chart-axis { stroke:var(--line); stroke-width:1; }
+.observed-line { fill:none; stroke:#315b83; stroke-width:2; }
+.observed-point { fill:#315b83; }
+.google-line { fill:none; stroke:var(--accent); stroke-width:2; stroke-dasharray:5 4; }
+.google-point { fill:var(--accent); }
+.history-table-wrap { overflow-x:auto; }
+.history-table { width:100%; border-collapse:collapse; font-size:.82rem; margin-top:18px; }
+.history-table th,.history-table td { text-align:left; border-bottom:1px solid var(--line); padding:10px 8px; vertical-align:top; }
+.history-table th { color:var(--muted); font-weight:700; }
+.insight-card { border-left:3px solid var(--accent); }
+.google-insights { margin-top:52px; }
+.search-panel input { width:100%; min-width:0; background:#fff; border:0; padding:13px; color:var(--ink); font:inherit; border-radius:2px; }
 @media (max-width:650px) {
+  .site-header { gap:12px; }
+  .primary-nav { gap:12px; }
+  .primary-nav-link { font-size:.78rem; }
   .route-fields,.config-grid,.mode-fields { grid-template-columns:1fr; }
   .route-fields fieldset { padding:14px; }
 }

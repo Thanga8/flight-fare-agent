@@ -73,8 +73,12 @@ class PersistenceTests(unittest.TestCase):
         }
         outcome = {"leg_number": 2, "departure_date": "2027-01-08", "status": "cache_miss",
                    "error": "CACHE_MISS", "data_source": "cache"}
-        first = db.persist_multi_leg_search(run=run, fares=[fare], outcomes=[outcome], comparisons=[comparison])
-        second = db.persist_multi_leg_search(run=run, fares=[fare], outcomes=[outcome], comparisons=[comparison])
+        insight = {"leg_number": 1, "departure_id": "HYD", "arrival_id": "CDG,ORY",
+                   "departure_date": "2027-01-01", "currency": "INR", "insight_status": "present",
+                   "insights_json": json.dumps({"lowest_price": 0}), "data_source": "cache",
+                   "source_fetched_at": "2027-01-01T01:00:00Z"}
+        first = db.persist_multi_leg_search(run=run, fares=[fare], outcomes=[outcome], comparisons=[comparison], google_insights=[insight])
+        second = db.persist_multi_leg_search(run=run, fares=[fare], outcomes=[outcome], comparisons=[comparison], google_insights=[insight])
         self.assertNotEqual(first, second)
         history = db.get_multi_leg_historical_prices("HYD", "CDG", "2027-01-01")
         self.assertEqual(1, len(history))
@@ -84,6 +88,7 @@ class PersistenceTests(unittest.TestCase):
             self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM multi_leg_search_runs").fetchone()[0])
             self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM multi_leg_comparisons").fetchone()[0])
             self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM multi_leg_search_outcomes").fetchone()[0])
+            self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM multi_leg_google_insights").fetchone()[0])
         finally:
             connection.close()
 
@@ -109,10 +114,13 @@ class PersistenceTests(unittest.TestCase):
                 from_airport, to_airport = (
                     ("HYD", "CDG") if "HYD" in departure_id else ("HEL", "HYD")
                 )
-                return {"best_flights": [{"price": 20000, "flights": [{
+                response = {"best_flights": [{"price": 20000, "flights": [{
                     "departure_airport": {"id": from_airport},
                     "arrival_airport": {"id": to_airport},
                 }]}], "_source_fetched_at": "2027-01-01T00:00:00Z"}
+                if from_airport == "HYD":
+                    response["price_insights"] = {"lowest_price": 0, "price_level": "low"}
+                return response
 
             def search_multi_city(self, legs, cache_mode):
                 return {"best_flights": [{"price": 39000, "flights": [{
@@ -131,6 +139,8 @@ class PersistenceTests(unittest.TestCase):
             self.assertEqual(2, connection.execute("SELECT COUNT(*) FROM multi_leg_fare_observations").fetchone()[0])
             self.assertEqual("priced", connection.execute("SELECT status FROM multi_leg_search_outcomes WHERE leg_number=1").fetchone()[0])
             self.assertEqual(1, connection.execute("SELECT COUNT(*) FROM multi_leg_comparisons").fetchone()[0])
+            statuses = {row[0] for row in connection.execute("SELECT insight_status FROM multi_leg_google_insights")}
+            self.assertEqual({"present", "absent"}, statuses)
         finally:
             connection.close()
 

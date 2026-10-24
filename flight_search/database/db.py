@@ -214,6 +214,23 @@ def initialize_database():
             source_fetched_at TEXT,
             recorded_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS multi_leg_google_insights (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            search_run_id INTEGER NOT NULL REFERENCES multi_leg_search_runs(id),
+            leg_number INTEGER NOT NULL CHECK (leg_number IN (1, 2)),
+            departure_id TEXT NOT NULL,
+            arrival_id TEXT NOT NULL,
+            departure_date TEXT NOT NULL,
+            currency TEXT NOT NULL,
+            insight_status TEXT NOT NULL,
+            insights_json TEXT,
+            data_source TEXT NOT NULL,
+            source_fetched_at TEXT,
+            recorded_at TEXT NOT NULL,
+            snapshot_key TEXT NOT NULL UNIQUE
+        );
+        CREATE INDEX IF NOT EXISTS idx_multi_leg_google_insights_context
+        ON multi_leg_google_insights(departure_date, departure_id, arrival_id, source_fetched_at);
     """)
 
     connection.commit()
@@ -222,7 +239,8 @@ def initialize_database():
 
 
 def persist_multi_leg_search(*, run: Dict[str, Any], fares: list[Dict[str, Any]],
-                             outcomes: list[Dict[str, Any]], comparisons: list[Dict[str, Any]]) -> int:
+                             outcomes: list[Dict[str, Any]], comparisons: list[Dict[str, Any]],
+                             google_insights: Optional[list[Dict[str, Any]]] = None) -> int:
     """Persist one multi-leg run atomically; cached observation keys deduplicate reuse."""
     initialize_database()
     recorded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -282,6 +300,31 @@ def persist_multi_leg_search(*, run: Dict[str, Any], fares: list[Dict[str, Any]]
                      comparison["status"], json.dumps(comparison.get("details", {}), ensure_ascii=False, sort_keys=True),
                      comparison.get("data_source", "live"), comparison.get("source_fetched_at"), recorded_at),
                 )
+            for insight in google_insights or []:
+                source_time = insight.get("source_fetched_at")
+                identity = {
+                    "leg_number": insight["leg_number"],
+                    "departure_id": insight["departure_id"],
+                    "arrival_id": insight["arrival_id"],
+                    "departure_date": insight["departure_date"],
+                    "currency": insight.get("currency", "INR"),
+                    "insight_status": insight["insight_status"],
+                    "insights_json": insight.get("insights_json"),
+                    "source_fetched_at": source_time,
+                }
+                snapshot_key = hashlib.sha256(
+                    json.dumps(identity, sort_keys=True, ensure_ascii=False).encode("utf-8")
+                ).hexdigest()
+                connection.execute(
+                    """INSERT OR IGNORE INTO multi_leg_google_insights (
+                        search_run_id,leg_number,departure_id,arrival_id,departure_date,currency,
+                        insight_status,insights_json,data_source,source_fetched_at,recorded_at,snapshot_key
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (run_id, insight["leg_number"], insight["departure_id"], insight["arrival_id"],
+                     insight["departure_date"], insight.get("currency", "INR"), insight["insight_status"],
+                     insight.get("insights_json"), insight.get("data_source", "live"), source_time,
+                     recorded_at, snapshot_key),
+                )
         return run_id
     finally:
         connection.close()
@@ -290,6 +333,7 @@ def persist_multi_leg_search(*, run: Dict[str, Any], fares: list[Dict[str, Any]]
 def get_multi_leg_historical_prices(departure_airport: str, arrival_airport: str,
                                     departure_date: str) -> list[Dict[str, Any]]:
     """Return distinct fare observations ordered by their source observation time."""
+    initialize_database()
     connection = get_connection()
     try:
         rows = connection.execute(
@@ -299,6 +343,28 @@ def get_multi_leg_historical_prices(departure_airport: str, arrival_airport: str
             (departure_airport, arrival_airport, departure_date),
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def get_multi_leg_google_insights(departure_airport: str, arrival_airport: str,
+                                  departure_date: str) -> list[Dict[str, Any]]:
+    """Return snapshots whose queried airport groups include this exact route."""
+    initialize_database()
+    connection = get_connection()
+    try:
+        rows = connection.execute(
+            """SELECT * FROM multi_leg_google_insights WHERE departure_date=?
+               ORDER BY COALESCE(source_fetched_at, recorded_at), id""",
+            (departure_date,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            item = dict(row)
+            if (departure_airport in item["departure_id"].split(",") and
+                    arrival_airport in item["arrival_id"].split(",")):
+                result.append(item)
+        return result
     finally:
         connection.close()
 

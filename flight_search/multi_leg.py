@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 
 from flight_search.airports import get_airports
@@ -152,6 +153,31 @@ def _outcome(payload: dict, leg_number: int, flight_date: str, cache_mode: str) 
     }
 
 
+def _google_insight_record(payload: dict, leg_number: int, departure_id: str,
+                           arrival_id: str, flight_date: str, cache_mode: str) -> dict | None:
+    if payload.get("error") or payload.get("_budget_exhausted"):
+        return None
+    if "price_insights" not in payload:
+        status, encoded = "absent", None
+    elif payload["price_insights"] is None:
+        status, encoded = "null", "null"
+    elif payload["price_insights"] == {} or payload["price_insights"] == []:
+        status, encoded = "empty", json.dumps(payload["price_insights"], ensure_ascii=False)
+    else:
+        status, encoded = "present", json.dumps(payload["price_insights"], ensure_ascii=False, sort_keys=True)
+    return {
+        "leg_number": leg_number,
+        "departure_id": departure_id,
+        "arrival_id": arrival_id,
+        "departure_date": flight_date,
+        "currency": "INR",
+        "insight_status": status,
+        "insights_json": encoded,
+        "data_source": "cache" if payload.get("_cache_hit") else cache_mode,
+        "source_fetched_at": payload.get("_source_fetched_at"),
+    }
+
+
 class _BudgetedProvider:
     """Gate every live SerpApi request at the provider call boundary."""
     def __init__(self, provider, budget):
@@ -250,6 +276,7 @@ def search_multi_leg_itineraries(
     return_fares = {}
     stored_fares = []
     stored_outcomes = []
+    stored_insights = []
     errors = {"HYD-PAR": [], "HEL-HYD": []}
     cache_hits = {"leg1": 0, "leg2": 0}
     for first_date in candidate_dates:
@@ -266,6 +293,12 @@ def search_multi_leg_itineraries(
         except Exception as error:
             outbound_payload = {"error": f"PROVIDER_ERROR: {error}", "_cache_hit": False}
         cache_hits["leg1"] += int(bool(outbound_payload.get("_cache_hit")))
+        insight = _google_insight_record(
+            outbound_payload, 1, ",".join(leg1_origins), ",".join(leg1_destinations),
+            first_date, leg1_cache_mode,
+        )
+        if insight:
+            stored_insights.append(insight)
         stored_outcomes.append(_outcome(outbound_payload, 1, first_date, leg1_cache_mode))
         stored_fares.extend(_cheapest_fares_by_airport_pair(
             outbound_payload, first_date, 1, stored_outcomes[-1]["data_source"]
@@ -288,6 +321,12 @@ def search_multi_leg_itineraries(
         except Exception as error:
             return_payload = {"error": f"PROVIDER_ERROR: {error}", "_cache_hit": False}
         cache_hits["leg2"] += int(bool(return_payload.get("_cache_hit")))
+        insight = _google_insight_record(
+            return_payload, 2, ",".join(leg2_origins), ",".join(leg2_destinations),
+            second_date, leg2_cache_mode,
+        )
+        if insight:
+            stored_insights.append(insight)
         stored_outcomes.append(_outcome(return_payload, 2, second_date, leg2_cache_mode))
         stored_fares.extend(_cheapest_fares_by_airport_pair(
             return_payload, second_date, 2, stored_outcomes[-1]["data_source"]
@@ -481,6 +520,7 @@ def search_multi_leg_itineraries(
             fares=stored_fares,
             outcomes=stored_outcomes,
             comparisons=stored_comparisons,
+            google_insights=stored_insights,
         )
     except Exception as error:
         report["persistence_error"] = str(error)

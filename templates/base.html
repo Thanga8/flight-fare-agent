@@ -12,6 +12,12 @@
       <a class="brand" href="{{ url_for('index') }}" aria-label="Fare Path home">
         <span class="brand-mark">✦</span> Fare Path
       </a>
+      <nav class="primary-nav" aria-label="Primary navigation">
+        <a class="primary-nav-link {% if request.endpoint in ['index', 'search'] %}active{% endif %}"
+           href="{{ url_for('index') }}" {% if request.endpoint in ['index', 'search'] %}aria-current="page"{% endif %}>Search</a>
+        <a class="primary-nav-link {% if request.endpoint == 'fare_history' %}active{% endif %}"
+           href="{{ url_for('fare_history') }}" {% if request.endpoint == 'fare_history' %}aria-current="page"{% endif %}>Fare History</a>
+      </nav>
       <span class="header-note">Flexible fares, deliberate searches</span>
     </header>
     <main>{% block content %}{% endblock %}</main>

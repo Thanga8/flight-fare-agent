@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block title %}Fare Path · Fare history{% endblock %}
+{% block content %}
+<section class="results-hero">
+  <p class="eyebrow">SAVED OBSERVATIONS</p>
+  <h1>Fare history</h1>
+  <p>Review saved multi-leg fares for an exact airport route and departure date. Searches add observations when they return priced flights; this page never starts a flight search.</p>
+</section>
+
+<section class="search-panel" aria-labelledby="history-search-title">
+  <h2 id="history-search-title">Choose a route and date</h2>
+  {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
+  <form method="get" action="{{ url_for('fare_history') }}">
+    <div class="route-fields">
+      <label>Departure airport<input name="departure_airport" value="{{ departure_airport }}" required placeholder="HYD"></label>
+      <label>Arrival airport<input name="arrival_airport" value="{{ arrival_airport }}" required placeholder="CDG"></label>
+    </div>
+    <label>Departure date<input type="date" name="departure_date" value="{{ departure_date }}" required></label>
+    <button type="submit">View saved history <span>→</span></button>
+  </form>
+</section>
+
+{% if departure_date and not error %}
+<section class="results-list">
+  <div class="section-heading">
+    <h2>Our observed fares · {{ departure_airport }} → {{ arrival_airport }} · {{ departure_date }}</h2>
+    <p>Only this airport pair, departure date, and currency are combined in each trend.</p>
+  </div>
+  {% for group in fare_groups %}
+  <article class="itinerary-card">
+    <div class="section-heading"><h3>Agent observations · {{ group.currency }}</h3><p>{{ group.observations|length }} distinct observation(s)</p></div>
+    <p><strong>Itinerary series:</strong> {{ group.itinerary_signature }}</p>
+    <div class="metrics" aria-label="Observed fare summary">
+      <div><strong>{{ group.latest.price|round(2) }}</strong><span>Latest observed fare · {{ group.currency }} · {{ group.latest.observation_time }}</span></div>
+      <div><strong>{{ group.lowest|round(2) }}</strong><span>Lowest observed so far · not a market-wide guarantee</span></div>
+      <div><strong>{{ group.lowest|round(2) }} – {{ group.highest|round(2) }}</strong><span>Observed range · {{ group.currency }}</span></div>
+    </div>
+    {% if group.enough_for_trend %}
+    <div class="history-chart-wrap">
+      <h4>Observed price over time</h4>
+      <svg class="history-chart" viewBox="0 0 600 210" role="img" aria-label="Saved fare observations over time, in {{ group.currency }}">
+        <line x1="24" y1="180" x2="576" y2="180" class="chart-axis" />
+        {% if group.chart.points|length > 1 %}<polyline points="{{ group.chart.polyline }}" class="observed-line" />{% endif %}
+        {% for point in group.chart.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="5" class="observed-point"><title>{{ point.label }}</title></circle>{% endfor %}
+      </svg>
+    </div>
+    {% else %}<p class="field-hint">One valid observation is saved. More observations are needed to show a price trend.</p>{% endif %}
+    <div class="history-table-wrap"><table class="history-table">
+      <thead><tr><th>Observed at (original fetch)</th><th>Fare</th><th>Source</th><th>Flight details</th><th>Recorded in database</th></tr></thead>
+      <tbody>{% for observation in group.observations %}<tr>
+        <td>{{ observation.observation_time }}</td>
+        <td>{{ observation.price|round(2) }} {{ group.currency }}</td>
+        <td>{{ observation.data_source }}</td>
+        <td>{{ observation.itinerary_detail }}</td>
+        <td>{{ observation.recorded_at }}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+  </article>
+  {% else %}<p class="empty-state">No saved fare observations match this exact airport pair and departure date yet. Use <a href="{{ url_for('index') }}">the search page</a> to collect observations for this route.</p>{% endfor %}
+</section>
+
+<section class="results-list google-insights">
+  <div class="section-heading"><h2>Google Flights-provided insight</h2><p>Market reference from the saved SerpApi response; it is separate from fares observed by this agent and may describe a broader route or different itinerary.</p></div>
+  {% for snapshot in insight_rows %}
+  <article class="itinerary-card insight-card">
+    <p><strong>Query context:</strong> {{ snapshot.departure_id }} → {{ snapshot.arrival_id }} on {{ snapshot.departure_date }} · {{ snapshot.currency }} · {{ snapshot.data_source }}</p>
+    <p><strong>Retrieved:</strong> {{ snapshot.source_fetched_at or "original fetch time unavailable" }} · recorded {{ snapshot.recorded_at }}</p>
+    {% if snapshot.insight_status == 'absent' %}
+      <p>This response did not include a <code>price_insights</code> field.</p>
+    {% elif snapshot.insight_status == 'null' %}
+      <p>The response included <code>price_insights</code> as null.</p>
+    {% elif snapshot.insight_status == 'empty' %}
+      <p>The response included an empty Google price-insights object.</p>
+    {% else %}
+      {% if snapshot.insights.lowest_price is defined and snapshot.insights.lowest_price is not none %}<p>Google's lowest returned price: {{ snapshot.insights.lowest_price }} {{ snapshot.currency }}</p>{% endif %}
+      {% if snapshot.insights.price_level is defined and snapshot.insights.price_level is not none %}<p>Google price level: {{ snapshot.insights.price_level }}</p>{% endif %}
+      {% if snapshot.typical_price_range is not none %}<p>Google typical price range: {{ snapshot.typical_price_range[0] }} – {{ snapshot.typical_price_range[1] }} {{ snapshot.currency }}</p>{% endif %}
+      {% if snapshot.price_points %}<h3>Google historical price points</h3><svg class="history-chart" viewBox="0 0 600 210" role="img" aria-label="Google-provided historical price points in {{ snapshot.currency }}">
+        <line x1="24" y1="180" x2="576" y2="180" class="chart-axis" />
+        {% if snapshot.chart.points|length > 1 %}<polyline points="{{ snapshot.chart.polyline }}" class="google-line" />{% endif %}
+        {% for point in snapshot.chart.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="5" class="google-point"><title>{{ point.label }}</title></circle>{% endfor %}
+      </svg>{% else %}<p>Google did not provide historical price points in this snapshot.</p>{% endif %}
+    {% endif %}
+  </article>
+  {% else %}<p class="empty-state">No Google price-insight snapshots are stored for this route/date. The search response may not have supplied one.</p>{% endfor %}
+</section>
+{% endif %}
+<aside class="price-note"><strong>How to read this page</strong><p>“Latest” means the latest valid saved observation, not a live fare quote. Cached reuse keeps its original fetch time and does not add another observation. Google price history is Google's supplied reference series, not our own observations. Neither series predicts future prices.</p></aside>
+<p><a class="back-link" href="{{ url_for('index') }}">← Back to flight search</a></p>
+{% endblock %}
