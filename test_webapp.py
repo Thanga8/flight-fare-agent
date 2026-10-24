@@ -33,12 +33,12 @@ class WebAppTests(unittest.TestCase):
         links = _booking_links(
             {
                 "leg1": {
-                    "departure_date": "2027-01-24",
                     "arrival_airport": "CDG",
+                    "departure_date": "2027-01-24",
                 },
                 "leg2": {
-                    "departure_date": "2027-01-31",
                     "departure_airport": "HEL",
+                    "departure_date": "2027-01-31",
                 },
             },
             {
@@ -48,6 +48,7 @@ class WebAppTests(unittest.TestCase):
             },
         )
 
+        self.assertIn("HYD", links["leg1"])
         self.assertIn("2027-01-24", links["leg1"])
         self.assertIn("2027-01-31", links["leg2"])
 

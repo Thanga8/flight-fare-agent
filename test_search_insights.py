@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from flight_search.multi_leg import search_multi_leg_itineraries
-from webapp import app
+from webapp import _plot_points, app
 
 
 class InsightProvider:
@@ -29,6 +29,45 @@ class InsightProvider:
 
     def search_multi_city(self, legs, cache_mode):
         return {"error": "CACHE_MISS: test"}
+
+
+class PlotPointsTests(unittest.TestCase):
+    def test_chart_includes_labeled_date_and_fare_axis_ticks(self):
+        chart = _plot_points([
+            {"timestamp": 1790899200, "price": 37000, "label": "first observation"},
+            {"timestamp": 1791504000, "price": 63000, "label": "second observation"},
+            {"timestamp": 1792108800, "price": 42000, "label": "third observation"},
+        ])
+
+        self.assertEqual(3, len(chart["x_ticks"]))
+        self.assertTrue(all(tick["label"] for tick in chart["x_ticks"]))
+        self.assertEqual(5, len(chart["y_ticks"]))
+        self.assertTrue(all(tick["label"] for tick in chart["y_ticks"]))
+        self.assertTrue(all(76 <= point["x"] <= 580 for point in chart["points"]))
+        self.assertTrue(all(24 <= point["y"] <= 190 for point in chart["points"]))
+        self.assertLess(chart["y_ticks"][0]["value"], 37000)
+        self.assertGreater(chart["y_ticks"][-1]["value"], 63000)
+
+    def test_x_axis_dates_are_formatted_from_utc_timestamps(self):
+        chart = _plot_points([
+            {"timestamp": 1790899200, "price": 37000, "label": "sample"},
+        ])
+
+        self.assertEqual(["02 Oct 26"], [tick["label"] for tick in chart["x_ticks"]])
+
+    def test_single_identical_price_observations_remain_visible_and_in_range(self):
+        chart = _plot_points([
+            {"timestamp": 1790899200, "price": 50000, "label": "first"},
+            {"timestamp": 1790899200, "price": 50000, "label": "second"},
+        ])
+
+        self.assertEqual(2, len(chart["points"]))
+        self.assertEqual(chart["points"][0]["x"], chart["points"][1]["x"])
+        self.assertEqual(chart["points"][0]["y"], chart["points"][1]["y"])
+        self.assertTrue(all(24 <= point["y"] <= 190 for point in chart["points"]))
+        self.assertEqual(5, len(chart["y_ticks"]))
+        self.assertLess(chart["y_ticks"][0]["value"], 50000)
+        self.assertGreater(chart["y_ticks"][-1]["value"], 50000)
 
 
 class SearchInsightReportTests(unittest.TestCase):
