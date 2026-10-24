@@ -1,4 +1,7 @@
 import sqlite3
+import hashlib
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -149,9 +152,155 @@ def initialize_database():
         """
     )
 
+    # Isolated storage for the two-leg experimental search model.
+    cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS multi_leg_search_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            searched_at TEXT NOT NULL,
+            start_date TEXT NOT NULL,
+            end_date TEXT NOT NULL,
+            nights_between_departures INTEGER NOT NULL,
+            leg1_origin TEXT NOT NULL,
+            leg1_destination TEXT NOT NULL,
+            leg2_origin TEXT NOT NULL,
+            leg2_destination TEXT NOT NULL,
+            leg1_cache_mode TEXT NOT NULL,
+            leg2_cache_mode TEXT NOT NULL,
+            combined_cache_mode TEXT NOT NULL,
+            serpapi_budget INTEGER NOT NULL,
+            serpapi_calls INTEGER NOT NULL,
+            budget_limited INTEGER NOT NULL,
+            statistics_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS multi_leg_fare_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            search_run_id INTEGER NOT NULL REFERENCES multi_leg_search_runs(id),
+            leg_number INTEGER NOT NULL CHECK (leg_number IN (1, 2)),
+            departure_date TEXT NOT NULL,
+            departure_airport TEXT NOT NULL,
+            arrival_airport TEXT NOT NULL,
+            price REAL NOT NULL,
+            currency TEXT NOT NULL,
+            flight_json TEXT NOT NULL,
+            data_source TEXT NOT NULL,
+            source_fetched_at TEXT NOT NULL,
+            recorded_at TEXT NOT NULL,
+            observation_key TEXT NOT NULL UNIQUE
+        );
+        CREATE INDEX IF NOT EXISTS idx_multi_leg_fares_route_date_time
+        ON multi_leg_fare_observations(departure_airport, arrival_airport, departure_date, source_fetched_at);
+        CREATE TABLE IF NOT EXISTS multi_leg_search_outcomes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            search_run_id INTEGER NOT NULL REFERENCES multi_leg_search_runs(id),
+            leg_number INTEGER NOT NULL CHECK (leg_number IN (1, 2)),
+            departure_date TEXT NOT NULL,
+            status TEXT NOT NULL,
+            error TEXT,
+            data_source TEXT NOT NULL,
+            source_fetched_at TEXT,
+            recorded_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS multi_leg_comparisons (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            search_run_id INTEGER NOT NULL REFERENCES multi_leg_search_runs(id),
+            leg1_departure_date TEXT NOT NULL,
+            leg2_departure_date TEXT NOT NULL,
+            separate_total REAL NOT NULL,
+            combined_price REAL,
+            difference REAL,
+            status TEXT NOT NULL,
+            details_json TEXT NOT NULL,
+            data_source TEXT NOT NULL,
+            source_fetched_at TEXT,
+            recorded_at TEXT NOT NULL
+        );
+    """)
+
     connection.commit()
 
     connection.close()
+
+
+def persist_multi_leg_search(*, run: Dict[str, Any], fares: list[Dict[str, Any]],
+                             outcomes: list[Dict[str, Any]], comparisons: list[Dict[str, Any]]) -> int:
+    """Persist one multi-leg run atomically; cached observation keys deduplicate reuse."""
+    initialize_database()
+    recorded_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    connection = get_connection()
+    try:
+        with connection:
+            cursor = connection.execute(
+                """INSERT INTO multi_leg_search_runs (
+                    searched_at,start_date,end_date,nights_between_departures,
+                    leg1_origin,leg1_destination,leg2_origin,leg2_destination,
+                    leg1_cache_mode,leg2_cache_mode,combined_cache_mode,
+                    serpapi_budget,serpapi_calls,budget_limited,statistics_json
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (recorded_at, run["start_date"], run["end_date"], run["nights"],
+                 run["leg1_origin"], run["leg1_destination"], run["leg2_origin"], run["leg2_destination"],
+                 run["leg1_cache_mode"], run["leg2_cache_mode"], run["combined_cache_mode"],
+                 run["serpapi_budget"], run["serpapi_calls"], int(run["budget_limited"]),
+                 json.dumps(run["statistics"], ensure_ascii=False, sort_keys=True)),
+            )
+            run_id = cursor.lastrowid
+            for fare in fares:
+                source_time = fare.get("source_fetched_at") or recorded_at
+                identity = {key: fare.get(key) for key in (
+                    "departure_date", "departure_airport", "arrival_airport", "price", "currency"
+                )}
+                identity["source_fetched_at"] = source_time
+                if fare.get("data_source") == "live":
+                    identity["live_run_id"] = run_id
+                key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
+                connection.execute(
+                    """INSERT OR IGNORE INTO multi_leg_fare_observations (
+                        search_run_id,leg_number,departure_date,departure_airport,arrival_airport,
+                        price,currency,flight_json,data_source,source_fetched_at,recorded_at,observation_key
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (run_id, fare["leg_number"], fare["departure_date"], fare["departure_airport"],
+                     fare["arrival_airport"], fare["price"], fare.get("currency", "INR"),
+                     json.dumps(fare.get("flight", {}), ensure_ascii=False, sort_keys=True),
+                     fare.get("data_source", "live"), source_time, recorded_at, key),
+                )
+            for outcome in outcomes:
+                connection.execute(
+                    """INSERT INTO multi_leg_search_outcomes (
+                        search_run_id,leg_number,departure_date,status,error,data_source,source_fetched_at,recorded_at
+                    ) VALUES (?,?,?,?,?,?,?,?)""",
+                    (run_id, outcome["leg_number"], outcome["departure_date"], outcome["status"],
+                     outcome.get("error"), outcome.get("data_source", "live"),
+                     outcome.get("source_fetched_at"), recorded_at),
+                )
+            for comparison in comparisons:
+                connection.execute(
+                    """INSERT INTO multi_leg_comparisons (
+                        search_run_id,leg1_departure_date,leg2_departure_date,separate_total,
+                        combined_price,difference,status,details_json,data_source,source_fetched_at,recorded_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    (run_id, comparison["leg1_departure_date"], comparison["leg2_departure_date"],
+                     comparison["separate_total"], comparison.get("combined_price"), comparison.get("difference"),
+                     comparison["status"], json.dumps(comparison.get("details", {}), ensure_ascii=False, sort_keys=True),
+                     comparison.get("data_source", "live"), comparison.get("source_fetched_at"), recorded_at),
+                )
+        return run_id
+    finally:
+        connection.close()
+
+
+def get_multi_leg_historical_prices(departure_airport: str, arrival_airport: str,
+                                    departure_date: str) -> list[Dict[str, Any]]:
+    """Return distinct fare observations ordered by their source observation time."""
+    connection = get_connection()
+    try:
+        rows = connection.execute(
+            """SELECT * FROM multi_leg_fare_observations
+               WHERE departure_airport=? AND arrival_airport=? AND departure_date=?
+               ORDER BY source_fetched_at ASC, id ASC""",
+            (departure_airport, arrival_airport, departure_date),
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
 
 
 # ==========================================

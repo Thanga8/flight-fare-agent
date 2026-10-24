@@ -1,7 +1,7 @@
 import json
 import hashlib
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
@@ -12,6 +12,85 @@ from flight_search.providers.base import FlightSearchProvider
 
 
 load_dotenv()
+
+CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _iso_utc(value: datetime) -> str:
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _read_fresh_cache(cache_path: Path, label: str) -> Dict[str, Any]:
+    """Read a fresh cache response; stale or unverifiable files are never evidence."""
+    if not cache_path.exists():
+        return {"error": f"CACHE_MISS: no cached result for {label}", "_cache_hit": False, "_cache_status": "miss"}
+    try:
+        with cache_path.open("r", encoding="utf-8") as file:
+            response = json.load(file)
+    except (OSError, json.JSONDecodeError) as error:
+        return {"error": f"STALE_CACHE: cached response cannot be read: {error}", "_cache_hit": False, "_cache_status": "stale", "_cache_age_seconds": None}
+    if not isinstance(response, dict):
+        return {"error": "STALE_CACHE: cached response has an invalid structure; cached result was not used",
+                "_cache_hit": False, "_cache_status": "stale", "_cache_age_seconds": None}
+
+    metadata = response.get("_serpapi_cache")
+    fetched_at = None
+    invalid_reason = None
+    if metadata is None:
+        try:
+            fetched_at = datetime.fromtimestamp(cache_path.stat().st_mtime, timezone.utc)
+        except (OSError, OverflowError, ValueError):
+            invalid_reason = "cache file modification time is unavailable"
+    elif not isinstance(metadata, dict) or not isinstance(metadata.get("fetched_at"), str):
+        invalid_reason = "cache timestamp metadata is missing or malformed"
+    else:
+        try:
+            fetched_at = datetime.fromisoformat(metadata["fetched_at"].replace("Z", "+00:00"))
+            if fetched_at.tzinfo is None:
+                invalid_reason = "cache timestamp has no timezone"
+            else:
+                fetched_at = fetched_at.astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            invalid_reason = "cache timestamp metadata is malformed"
+
+    now = _utc_now()
+    age = (now - fetched_at).total_seconds() if fetched_at else None
+    if invalid_reason is None and age is not None and age < 0:
+        invalid_reason = "cache timestamp is in the future"
+    elif invalid_reason is None and age is not None and age > CACHE_MAX_AGE_SECONDS:
+        invalid_reason = "cache is older than 24 hours"
+    if invalid_reason:
+        return {
+            "error": f"STALE_CACHE: {invalid_reason}; cached result was not used",
+            "_cache_hit": False,
+            "_cache_status": "stale",
+            "_cache_age_seconds": age,
+            "_source_fetched_at": _iso_utc(fetched_at) if fetched_at else None,
+        }
+    response["_cache_hit"] = True
+    response["_cache_status"] = "hit"
+    response["_cache_age_seconds"] = age
+    response["_source_fetched_at"] = _iso_utc(fetched_at)
+    return response
+
+
+def _save_cached_response(cache_path: Path, response: Dict[str, Any]) -> Dict[str, Any]:
+    fetched_at = _iso_utc(_utc_now())
+    saved = dict(response)
+    saved["_serpapi_cache"] = {"fetched_at": fetched_at}
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("w", encoding="utf-8") as file:
+        json.dump(saved, file, indent=2, ensure_ascii=False)
+    response["_cache_hit"] = False
+    response["_cache_status"] = "live"
+    response["_source_fetched_at"] = fetched_at
+    response["_cache_age_seconds"] = 0
+    response["_serpapi_cache"] = saved["_serpapi_cache"]
+    return response
 
 
 class SerpApiProvider(FlightSearchProvider):
@@ -109,16 +188,9 @@ class SerpApiProvider(FlightSearchProvider):
             departure_id, arrival_id, outbound_date
         )
         if cache_mode == "cache":
-            if not cache_path.exists():
-                return {
-                    "error": f"CACHE_MISS: no cached result for {departure_id} "
-                    f"to {arrival_id} on {outbound_date}",
-                    "_cache_hit": False,
-                }
-            with cache_path.open("r", encoding="utf-8") as file:
-                response = json.load(file)
-            response["_cache_hit"] = True
-            return response
+            return _read_fresh_cache(
+                cache_path, f"{departure_id} to {arrival_id} on {outbound_date}"
+            )
 
         if self.client is None:
             raise ValueError("SERPAPI_API_KEY is required for live searches.")
@@ -132,10 +204,7 @@ class SerpApiProvider(FlightSearchProvider):
             "type": "2",
         }
         response = dict(self.client.search(params))
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        with cache_path.open("w", encoding="utf-8") as file:
-            json.dump(dict(response), file, indent=2, ensure_ascii=False)
-        response["_cache_hit"] = False
+        response = _save_cached_response(cache_path, response)
         if self.save_raw_responses:
             self._save_raw_response(
                 response=dict(response),
@@ -164,23 +233,11 @@ class SerpApiProvider(FlightSearchProvider):
         }
         cache_path = self._query_cache_path(params, "multi_city")
         if cache_mode == "cache":
-            if not cache_path.exists():
-                return {
-                    "error": "CACHE_MISS: no cached result for this multi-city query",
-                    "_cache_hit": False,
-                }
-            with cache_path.open("r", encoding="utf-8") as file:
-                response = json.load(file)
-            response["_cache_hit"] = True
-            return response
+            return _read_fresh_cache(cache_path, "this multi-city query")
         if self.client is None:
             raise ValueError("SERPAPI_API_KEY is required for live searches.")
         response = dict(self.client.search(params))
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        with cache_path.open("w", encoding="utf-8") as file:
-            json.dump(response, file, indent=2, ensure_ascii=False)
-        response["_cache_hit"] = False
-        return response
+        return _save_cached_response(cache_path, response)
 
     @staticmethod
     def _one_way_cache_path(
