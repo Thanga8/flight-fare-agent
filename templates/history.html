@@ -38,11 +38,17 @@
     {% if group.enough_for_trend %}
     <div class="history-chart-wrap">
       <h4>Observed price over time</h4>
-      <svg class="history-chart" viewBox="0 0 600 210" role="img" aria-label="Saved fare observations over time, in {{ group.currency }}">
-        <line x1="24" y1="180" x2="576" y2="180" class="chart-axis" />
-        {% if group.chart.points|length > 1 %}<polyline points="{{ group.chart.polyline }}" class="observed-line" />{% endif %}
-        {% for point in group.chart.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="5" class="observed-point"><title>{{ point.label }}</title></circle>{% endfor %}
-      </svg>
+      <svg class="history-chart" viewBox="0 0 600 260" role="img" aria-label="Saved fare historical prices with date and {{ group.currency }} fare axes">
+          {% for tick in group.chart.y_ticks %}<line x1="76" y1="{{ tick.y }}" x2="580" y2="{{ tick.y }}" class="chart-grid" />{% endfor %}
+          <line x1="76" y1="24" x2="76" y2="190" class="chart-axis" />
+          <line x1="76" y1="190" x2="580" y2="190" class="chart-axis" />
+          {% for tick in group.chart.y_ticks %}<text x="68" y="{{ tick.y + 4 }}" class="chart-tick" text-anchor="end">{{ tick.label }}</text>{% endfor %}
+          {% for tick in group.chart.x_ticks %}<line x1="{{ tick.x }}" y1="190" x2="{{ tick.x }}" y2="195" class="chart-axis" /><text x="{{ tick.x }}" y="210" class="chart-tick" text-anchor="middle">{{ tick.label }}</text>{% endfor %}
+          {% if group.chart.points|length > 1 %}<polyline points="{{ group.chart.polyline }}" class="observed-line" />{% endif %}
+          {% for point in group.chart.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="5" class="observed-point"><title>{{ point.label }}</title></circle>{% endfor %}
+          <text x="328" y="244" class="chart-axis-title" text-anchor="middle">Observation date (UTC)</text>
+          <text x="18" y="107" transform="rotate(-90 18 107)" class="chart-axis-title" text-anchor="middle">Fare ({{ group.currency }})</text>
+        </svg>
     </div>
     {% else %}<p class="field-hint">One valid observation is saved. More observations are needed to show a price trend.</p>{% endif %}
     <div class="history-table-wrap"><table class="history-table">
@@ -75,11 +81,17 @@
       {% if snapshot.insights.lowest_price is defined and snapshot.insights.lowest_price is not none %}<p>Google's lowest returned price: {{ snapshot.insights.lowest_price }} {{ snapshot.currency }}</p>{% endif %}
       {% if snapshot.insights.price_level is defined and snapshot.insights.price_level is not none %}<p>Google price level: {{ snapshot.insights.price_level }}</p>{% endif %}
       {% if snapshot.typical_price_range is not none %}<p>Google typical price range: {{ snapshot.typical_price_range[0] }} – {{ snapshot.typical_price_range[1] }} {{ snapshot.currency }}</p>{% endif %}
-      {% if snapshot.price_points %}<h3>Google historical price points</h3><svg class="history-chart" viewBox="0 0 600 210" role="img" aria-label="Google-provided historical price points in {{ snapshot.currency }}">
-        <line x1="24" y1="180" x2="576" y2="180" class="chart-axis" />
-        {% if snapshot.chart.points|length > 1 %}<polyline points="{{ snapshot.chart.polyline }}" class="google-line" />{% endif %}
-        {% for point in snapshot.chart.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="5" class="google-point"><title>{{ point.label }}</title></circle>{% endfor %}
-      </svg>{% else %}<p>Google did not provide historical price points in this snapshot.</p>{% endif %}
+      {% if snapshot.price_points %}<h3>Google historical price points</h3><svg class="history-chart" viewBox="0 0 600 260" role="img" aria-label="Google-provided historical prices with date and {{ snapshot.currency }} fare axes">
+          {% for tick in snapshot.chart.y_ticks %}<line x1="76" y1="{{ tick.y }}" x2="580" y2="{{ tick.y }}" class="chart-grid" />{% endfor %}
+          <line x1="76" y1="24" x2="76" y2="190" class="chart-axis" />
+          <line x1="76" y1="190" x2="580" y2="190" class="chart-axis" />
+          {% for tick in snapshot.chart.y_ticks %}<text x="68" y="{{ tick.y + 4 }}" class="chart-tick" text-anchor="end">{{ tick.label }}</text>{% endfor %}
+          {% for tick in snapshot.chart.x_ticks %}<line x1="{{ tick.x }}" y1="190" x2="{{ tick.x }}" y2="195" class="chart-axis" /><text x="{{ tick.x }}" y="210" class="chart-tick" text-anchor="middle">{{ tick.label }}</text>{% endfor %}
+          {% if snapshot.chart.points|length > 1 %}<polyline points="{{ snapshot.chart.polyline }}" class="google-line" />{% endif %}
+          {% for point in snapshot.chart.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="5" class="google-point"><title>{{ point.label }}</title></circle>{% endfor %}
+          <text x="328" y="244" class="chart-axis-title" text-anchor="middle">Observation date (UTC)</text>
+          <text x="18" y="107" transform="rotate(-90 18 107)" class="chart-axis-title" text-anchor="middle">Fare ({{ snapshot.currency }})</text>
+        </svg>{% else %}<p>Google did not provide historical price points in this snapshot.</p>{% endif %}
     {% endif %}
   </article>
   {% else %}<p class="empty-state">No Google price-insight snapshots are stored for this route/date. The search response may not have supplied one.</p>{% endfor %}
