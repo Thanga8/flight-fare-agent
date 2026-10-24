@@ -78,6 +78,44 @@ class SearchInsightReportTests(unittest.TestCase):
             item["status"] for item in report["google_insights"]
         ])
 
+    def test_cache_miss_and_stale_cache_metadata_are_distinct_without_live_fallback(self):
+        class CacheOnlyProvider:
+            def __init__(self):
+                self.modes = []
+
+            def search_one_way(self, departure_id, arrival_id, outbound_date, cache_mode):
+                self.modes.append(cache_mode)
+                if departure_id == "HYD":
+                    return {
+                        "error": "CACHE_MISS: no cached result",
+                        "_cache_status": "miss", "_cache_hit": False,
+                    }
+                return {
+                    "error": "STALE_CACHE: older than 24 hours",
+                    "_cache_status": "stale", "_cache_hit": False,
+                }
+
+            def search_multi_city(self, legs, cache_mode):
+                raise AssertionError("No combined search was requested")
+
+        provider = CacheOnlyProvider()
+        with patch("flight_search.multi_leg.persist_multi_leg_search", return_value=1):
+            report = search_multi_leg_itineraries(
+                start_date="2027-01-01", end_date="2027-01-08",
+                international_provider=provider, serpapi_budget=0,
+                leg1_origin="HYD", leg1_destination="CDG",
+                leg2_origin="HEL", leg2_destination="HYD",
+                nights_between_departures=7,
+                leg1_cache_mode="cache", leg2_cache_mode="cache",
+                combined_cache_mode="cache", combined_candidate_limit=0,
+            )
+
+        self.assertEqual(["cache", "cache"], provider.modes)
+        self.assertEqual(["cache_miss", "stale_cache"], [
+            item["status"] for item in report["google_insights"]
+        ])
+        self.assertEqual(0, report["serpapi_calls"])
+
 
 class ResultsInsightRenderingTests(unittest.TestCase):
     def setUp(self):
@@ -163,6 +201,20 @@ class ResultsInsightRenderingTests(unittest.TestCase):
                 self.assertIn(expected, response.data)
                 self.assertNotIn(b"This response did not include Google price insights.", response.data)
                 self.assertNotIn(b"Typical fare range not provided.", response.data)
+
+    def test_cache_failures_have_separate_messages_from_provider_failures(self):
+        cases = (
+            ("cache_miss", b"No cached response was available. No live search was made"),
+            ("stale_cache", b"The cached response was stale and rejected. No live search fallback was made"),
+            ("cache_error", b"The cache could not provide a usable response. No live search was made"),
+            ("failed", b"This search failed, so no Google insight response is available."),
+        )
+        for status, expected in cases:
+            with self.subTest(status=status):
+                response = self.render_insights(self.insight(status=status, error="example"))
+                self.assertIn(expected, response.data)
+                if status != "failed":
+                    self.assertNotIn(b"This search failed, so no Google insight response is available.", response.data)
 
 
 if __name__ == "__main__":

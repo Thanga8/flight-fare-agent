@@ -21,6 +21,12 @@
     <p>Source: {{ insight.data_source }}{% if insight.source_fetched_at %} · Retrieved: {{ insight.source_fetched_at }}{% endif %}</p>
     {% if insight.status == 'budget_skipped' %}
       <p>This search was skipped because the SerpApi budget was exhausted. No Google insight response is available.</p>
+    {% elif insight.status == 'cache_miss' %}
+      <p>No cached response was available. No live search was made, so Google price insights are unavailable.</p>
+    {% elif insight.status == 'stale_cache' %}
+      <p>The cached response was stale and rejected. No live search fallback was made, so Google price insights are unavailable.</p>
+    {% elif insight.status == 'cache_error' %}
+      <p>The cache could not provide a usable response. No live search was made, so Google price insights are unavailable.</p>
     {% elif insight.status == 'failed' %}
       <p>This search failed, so no Google insight response is available.{% if insight.error %} {{ insight.error }}{% endif %}</p>
     {% elif insight.status == 'absent' %}

@@ -248,7 +248,7 @@ def _insight_views(rows):
         source_status = item.get("status", item.get("insight_status", "present"))
         if source_status == "absent":
             item["status"] = "absent"
-        elif source_status in {"failed", "budget_skipped"}:
+        elif source_status in {"failed", "budget_skipped", "cache_miss", "stale_cache", "cache_error"}:
             item["status"] = source_status
         elif source_status in {"null", "empty"} or insights is None or insights == {} or insights == []:
             item["status"] = "no_usable_insights"

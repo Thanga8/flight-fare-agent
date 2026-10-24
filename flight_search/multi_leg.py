@@ -190,10 +190,16 @@ def _google_insight_result(payload: dict, leg_number: int, departure_id: str,
         "data_source": "cache" if payload.get("_cache_hit") else cache_mode,
         "source_fetched_at": payload.get("_source_fetched_at"),
     }
+    cache_status = payload.get("_cache_status")
     if payload.get("_budget_exhausted"):
         result.update(status="budget_skipped", error=payload.get("error"))
+    elif cache_status == "miss":
+        result.update(status="cache_miss", error=payload.get("error"))
+    elif cache_status == "stale":
+        result.update(status="stale_cache", error=payload.get("error"))
     elif payload.get("error"):
-        result.update(status="failed", error=payload.get("error"))
+        status = "cache_error" if cache_mode == "cache" and not payload.get("_cache_hit") else "failed"
+        result.update(status=status, error=payload.get("error"))
     elif "price_insights" not in payload:
         result["status"] = "absent"
     else:
