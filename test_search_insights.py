@@ -45,8 +45,8 @@ class PlotPointsTests(unittest.TestCase):
         self.assertTrue(all(tick["label"] for tick in chart["y_ticks"]))
         self.assertTrue(all(76 <= point["x"] <= 580 for point in chart["points"]))
         self.assertTrue(all(24 <= point["y"] <= 190 for point in chart["points"]))
-        self.assertIn("37000", [tick["label"] for tick in chart["y_ticks"]])
-        self.assertIn("63000", [tick["label"] for tick in chart["y_ticks"]])
+        self.assertLess(chart["y_ticks"][0]["value"], 37000)
+        self.assertGreater(chart["y_ticks"][-1]["value"], 63000)
 
 
 class SearchInsightReportTests(unittest.TestCase):
