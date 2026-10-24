@@ -178,6 +178,30 @@ def _google_insight_record(payload: dict, leg_number: int, departure_id: str,
     }
 
 
+def _google_insight_result(payload: dict, leg_number: int, departure_id: str,
+                           arrival_id: str, flight_date: str, cache_mode: str) -> dict:
+    """Expose the original one-way response insight and its request outcome."""
+    result = {
+        "leg_number": leg_number,
+        "departure_id": departure_id,
+        "arrival_id": arrival_id,
+        "departure_date": flight_date,
+        "currency": "INR",
+        "data_source": "cache" if payload.get("_cache_hit") else cache_mode,
+        "source_fetched_at": payload.get("_source_fetched_at"),
+    }
+    if payload.get("_budget_exhausted"):
+        result.update(status="budget_skipped", error=payload.get("error"))
+    elif payload.get("error"):
+        result.update(status="failed", error=payload.get("error"))
+    elif "price_insights" not in payload:
+        result["status"] = "absent"
+    else:
+        result["status"] = "present"
+        result["price_insights"] = payload["price_insights"]
+    return result
+
+
 class _BudgetedProvider:
     """Gate every live SerpApi request at the provider call boundary."""
     def __init__(self, provider, budget):
@@ -277,6 +301,7 @@ def search_multi_leg_itineraries(
     stored_fares = []
     stored_outcomes = []
     stored_insights = []
+    result_insights = []
     errors = {"HYD-PAR": [], "HEL-HYD": []}
     cache_hits = {"leg1": 0, "leg2": 0}
     for first_date in candidate_dates:
@@ -293,6 +318,10 @@ def search_multi_leg_itineraries(
         except Exception as error:
             outbound_payload = {"error": f"PROVIDER_ERROR: {error}", "_cache_hit": False}
         cache_hits["leg1"] += int(bool(outbound_payload.get("_cache_hit")))
+        result_insights.append(_google_insight_result(
+            outbound_payload, 1, ",".join(leg1_origins), ",".join(leg1_destinations),
+            first_date, leg1_cache_mode,
+        ))
         insight = _google_insight_record(
             outbound_payload, 1, ",".join(leg1_origins), ",".join(leg1_destinations),
             first_date, leg1_cache_mode,
@@ -321,6 +350,10 @@ def search_multi_leg_itineraries(
         except Exception as error:
             return_payload = {"error": f"PROVIDER_ERROR: {error}", "_cache_hit": False}
         cache_hits["leg2"] += int(bool(return_payload.get("_cache_hit")))
+        result_insights.append(_google_insight_result(
+            return_payload, 2, ",".join(leg2_origins), ",".join(leg2_destinations),
+            second_date, leg2_cache_mode,
+        ))
         insight = _google_insight_record(
             return_payload, 2, ",".join(leg2_origins), ",".join(leg2_destinations),
             second_date, leg2_cache_mode,
@@ -484,6 +517,7 @@ def search_multi_leg_itineraries(
         "combined_cache_mode": combined_cache_mode,
         "combined_cache_hits": combined_cache_hits,
         "combined_results": combined_checks,
+        "google_insights": result_insights,
     }
     stored_comparisons = []
     for itinerary in itineraries[:combined_candidate_limit]:

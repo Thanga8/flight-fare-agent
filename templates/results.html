@@ -13,6 +13,42 @@
   <div><strong>{{ report.leg2_dates_searched }}</strong><span>{{ report.leg2_origin }} → {{ report.leg2_destination }} dates searched</span></div>
   <div><strong>{{ report.serpapi_calls }}/{{ report.serpapi_budget }}</strong><span>SerpApi calls used</span></div>
 </section>
+<section class="results-list google-insights" aria-labelledby="google-insights-title">
+  <div class="section-heading"><h2 id="google-insights-title">Google Flights Insights</h2><p>Provider-supplied reference data, separate from individual fares and saved fare history.</p></div>
+  {% for insight in report.google_insights %}
+  <article class="itinerary-card insight-card">
+    <h3>{{ insight.departure_id }} → {{ insight.arrival_id }} · {{ insight.departure_date }}</h3>
+    <p>Source: {{ insight.data_source }}{% if insight.source_fetched_at %} · Retrieved: {{ insight.source_fetched_at }}{% endif %}</p>
+    {% if insight.status == 'budget_skipped' %}
+      <p>This search was skipped because the SerpApi budget was exhausted. No Google insight response is available.</p>
+    {% elif insight.status == 'failed' %}
+      <p>This search failed, so no Google insight response is available.{% if insight.error %} {{ insight.error }}{% endif %}</p>
+    {% elif insight.status == 'absent' %}
+      <p>This response did not include Google price insights.</p>
+    {% elif insight.status == 'no_usable_insights' %}
+      <p>The provider returned no usable insights.</p>
+    {% else %}
+      {% if insight.typical_price_range is not none %}
+        <p><strong>Typical fare range:</strong> {{ insight.typical_price_range[0] }} – {{ insight.typical_price_range[1] }} {{ insight.currency }}</p>
+      {% else %}
+        <p><strong>Typical fare range not provided.</strong></p>
+      {% endif %}
+      {% if insight.insights.lowest_price is defined %}<p>Lowest returned price: {{ insight.insights.lowest_price }} {{ insight.currency }}</p>{% endif %}
+      {% if insight.insights.price_level is defined %}<p>Price level: {{ insight.insights.price_level }}</p>{% endif %}
+      {% if insight.price_points %}
+        <h4>Google-provided historical price points</h4>
+        <svg class="history-chart" viewBox="0 0 600 210" role="img" aria-label="Google-provided historical prices for {{ insight.departure_id }} to {{ insight.arrival_id }} on {{ insight.departure_date }}">
+          <line x1="24" y1="180" x2="576" y2="180" class="chart-axis" />
+          {% if insight.chart.points|length > 1 %}<polyline points="{{ insight.chart.polyline }}" class="google-line" />{% endif %}
+          {% for point in insight.chart.points %}<circle cx="{{ point.x }}" cy="{{ point.y }}" r="5" class="google-point"><title>{{ point.label }}</title></circle>{% endfor %}
+        </svg>
+        <ul>{% for point in insight.price_points %}<li>{{ point.label }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if not insight.has_other_insights %}<p>No other valid Google insight fields were provided.</p>{% endif %}
+    {% endif %}
+  </article>
+  {% else %}<p class="empty-state">No leg search responses were returned, so no Google insight data is available.</p>{% endfor %}
+</section>
 <section class="results-list">
   <div class="section-heading"><h2>Date pairs</h2><p>Sorted by combined price.</p></div>
   {% for itinerary in report.itineraries %}

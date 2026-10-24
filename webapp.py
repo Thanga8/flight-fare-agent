@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import json
+import math
 from datetime import date, datetime, timezone
 
 from flask import Flask, render_template, request
@@ -147,6 +148,7 @@ def search():
 
     for itinerary in report["itineraries"]:
         itinerary["booking_links"] = _booking_links(itinerary, report)
+    report["google_insights"] = _insight_views(report.get("google_insights", []))
 
     return render_template(
         "results.html",
@@ -236,27 +238,55 @@ def _insight_views(rows):
     result = []
     for row in rows:
         item = dict(row)
-        try:
-            insights = json.loads(item["insights_json"]) if item.get("insights_json") is not None else None
-        except (TypeError, json.JSONDecodeError):
-            insights = None
-        item["insights"] = insights if isinstance(insights, dict) else {}
-        raw_range = item["insights"].get("typical_price_range")
+        if "price_insights" in item:
+            insights = item["price_insights"]
+        else:
+            try:
+                insights = json.loads(item["insights_json"]) if item.get("insights_json") is not None else None
+            except (TypeError, json.JSONDecodeError):
+                insights = None
+        source_status = item.get("status", item.get("insight_status", "present"))
+        if source_status == "absent":
+            item["status"] = "absent"
+        elif source_status in {"failed", "budget_skipped"}:
+            item["status"] = source_status
+        elif source_status in {"null", "empty"} or insights is None or insights == {} or insights == []:
+            item["status"] = "no_usable_insights"
+        elif not isinstance(insights, dict):
+            item["status"] = "no_usable_insights"
+            insights = {}
+        else:
+            item["status"] = "present"
+
+        raw_range = insights.get("typical_price_range") if isinstance(insights, dict) else None
+        def valid_number(value, *, allow_negative=False):
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return False
+            try:
+                return math.isfinite(float(value)) and (allow_negative or value >= 0)
+            except (OverflowError, TypeError, ValueError):
+                return False
         item["typical_price_range"] = (
             raw_range if isinstance(raw_range, (tuple, list)) and len(raw_range) == 2
-            and all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in raw_range)
+            and all(valid_number(value) for value in raw_range)
+            and raw_range[0] <= raw_range[1]
             else None
         )
+        item["insights"] = {}
+        raw_lowest = insights.get("lowest_price") if isinstance(insights, dict) else None
+        if valid_number(raw_lowest):
+            item["insights"]["lowest_price"] = raw_lowest
+        raw_level = insights.get("price_level") if isinstance(insights, dict) else None
+        if isinstance(raw_level, str) and raw_level.strip():
+            item["insights"]["price_level"] = raw_level
         item["price_points"] = []
-        raw_series = item["insights"].get("price_history")
+        raw_series = insights.get("price_history") if isinstance(insights, dict) else None
         if isinstance(raw_series, list):
             for pair in raw_series:
                 if not isinstance(pair, (tuple, list)) or len(pair) < 2:
                     continue
                 timestamp, price = pair[0], pair[1]
-                if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
-                    continue
-                if isinstance(price, bool) or not isinstance(price, (int, float)):
+                if not valid_number(timestamp, allow_negative=True) or not valid_number(price):
                     continue
                 try:
                     label = datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
@@ -266,6 +296,7 @@ def _insight_views(rows):
         item["price_points"].sort(key=lambda point: point["timestamp"])
         item["chart"] = _plot_points(item["price_points"])
         item["retrieval_time"] = item.get("recorded_at")
+        item["has_other_insights"] = bool(item["insights"] or item["price_points"])
         result.append(item)
     return result
 
