@@ -24,6 +24,16 @@ AIRPORT_GROUPS = {
         "HEL"
     ],
 
+    "KAO": [
+        "KAO"
+    ],
+
+    "PAR": [
+        "CDG",
+        "ORY",
+        "BVA",
+    ],
+
     "MOW": [
         "SVO",
         "DME",

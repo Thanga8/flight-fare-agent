@@ -1,113 +1,155 @@
-"""Run the experimental HYD/MOW/MMK combined-itinerary search explicitly."""
+"""Run the experimental HYD–Paris / HEL–HYD search."""
 
 import argparse
 
 from flight_search.config.settings import (
-    END_DATE,
+    MULTI_LEG_COMBINED_CANDIDATE_LIMIT,
+    MULTI_LEG_END_DATE,
+    MULTI_LEG_LEG1_DESTINATION,
+    MULTI_LEG_LEG1_ORIGIN,
+    MULTI_LEG_LEG2_DESTINATION,
+    MULTI_LEG_LEG2_ORIGIN,
+    MULTI_LEG_NIGHTS_BETWEEN_DEPARTURES,
     MULTI_LEG_SERPAPI_BUDGET,
-    MULTI_LEG_TRAVELPAYOUTS_BUDGET,
-    RUB_TO_INR,
-    START_DATE,
+    MULTI_LEG_START_DATE,
 )
-from flight_search.multi_leg import (
-    create_multi_leg_candidates,
-    search_multi_leg_itineraries,
-)
+from flight_search.multi_leg import search_multi_leg_itineraries
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Search the experimental HYD/MOW/MMK itinerary."
+        description="Search HYD–Paris and HEL–HYD one-way legs."
     )
     parser.add_argument(
-        "--live",
-        action="store_true",
-        help="Allow live Travelpayouts and SerpApi requests.",
+        "--live", action="store_true",
+        help="Allow live SerpApi requests.",
     )
     parser.add_argument(
-        "--serpapi-budget",
+        "--serpapi-budget", type=int, default=MULTI_LEG_SERPAPI_BUDGET,
+        help=f"SerpApi cap for this run (maximum {MULTI_LEG_SERPAPI_BUDGET}).",
+    )
+    parser.add_argument("--start-date", default=MULTI_LEG_START_DATE)
+    parser.add_argument("--end-date", default=MULTI_LEG_END_DATE)
+    parser.add_argument("--leg1-origin", default=MULTI_LEG_LEG1_ORIGIN)
+    parser.add_argument("--leg1-destination", default=MULTI_LEG_LEG1_DESTINATION)
+    parser.add_argument("--leg2-origin", default=MULTI_LEG_LEG2_ORIGIN)
+    parser.add_argument("--leg2-destination", default=MULTI_LEG_LEG2_DESTINATION)
+    parser.add_argument(
+        "--nights-between-departures",
         type=int,
-        default=MULTI_LEG_SERPAPI_BUDGET,
-        help="SerpApi cap for this run (maximum 20).",
+        default=MULTI_LEG_NIGHTS_BETWEEN_DEPARTURES,
     )
     parser.add_argument(
-        "--show-all",
-        action="store_true",
-        help="Print every complete itinerary rather than only the top five.",
+        "--combined-candidates",
+        type=int,
+        default=MULTI_LEG_COMBINED_CANDIDATE_LIMIT,
+        help="Number of cheapest separate-leg candidates to compare as multi-city.",
+    )
+    parser.add_argument(
+        "--leg1", choices=("live", "cache"), default="live",
+        help="Live or cached results for HYD to Paris.",
+    )
+    parser.add_argument(
+        "--leg2", choices=("live", "cache"), default="live",
+        help="Live or cached results for HEL to HYD.",
+    )
+    parser.add_argument(
+        "--combined", choices=("live", "cache"), default="live",
+        help="Live or cached multi-city comparison for the top three candidates.",
     )
     args = parser.parse_args()
     if not 0 <= args.serpapi_budget <= MULTI_LEG_SERPAPI_BUDGET:
-        parser.error("--serpapi-budget must be between 0 and 20")
+        parser.error(
+            f"--serpapi-budget must be between 0 and {MULTI_LEG_SERPAPI_BUDGET}"
+        )
 
-    candidates = create_multi_leg_candidates(START_DATE, END_DATE)
-    print("MULTI-LEG ITINERARY PLAN")
-    print(f"International window: {START_DATE} to {END_DATE}")
-    print(f"Valid domestic 4-day candidates: {len(candidates)}")
-    print(f"Travelpayouts cap: {MULTI_LEG_TRAVELPAYOUTS_BUDGET}")
+    print("MULTI-CITY ITINERARY PLAN")
+    print(f"Date window: {args.start_date} to {args.end_date}")
+    print(f"Leg 1: {args.leg1_origin} → {args.leg1_destination}")
+    print(f"Leg 2: {args.leg2_origin} → {args.leg2_destination}")
+    print(f"Departure date gap: {args.nights_between_departures} nights")
     print(f"SerpApi cap: {args.serpapi_budget}")
-    print(f"Conversion: 1 RUB = {RUB_TO_INR} INR")
-
     if not args.live:
         print("No API calls made. Re-run with --live to execute the search.")
         return
 
     from flight_search.providers.serpapi_provider import SerpApiProvider
-    from flight_search.providers.travelpayouts_provider import TravelpayoutsProvider
+
+    provider = SerpApiProvider(
+        allow_cache_only=(
+            args.leg1 == "cache" and args.leg2 == "cache"
+            and args.combined == "cache"
+        )
+    )
 
     report = search_multi_leg_itineraries(
-        start_date=START_DATE,
-        end_date=END_DATE,
-        domestic_provider=TravelpayoutsProvider(),
-        international_provider=SerpApiProvider(),
-        travelpayouts_budget=MULTI_LEG_TRAVELPAYOUTS_BUDGET,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        international_provider=provider,
         serpapi_budget=args.serpapi_budget,
-        rub_to_inr=RUB_TO_INR,
+        leg1_origin=args.leg1_origin,
+        leg1_destination=args.leg1_destination,
+        leg2_origin=args.leg2_origin,
+        leg2_destination=args.leg2_destination,
+        nights_between_departures=args.nights_between_departures,
+        leg1_cache_mode=args.leg1,
+        leg2_cache_mode=args.leg2,
+        combined_cache_mode=args.combined,
+        combined_candidate_limit=args.combined_candidates,
     )
-
+    print(f"SerpApi calls used: {report['serpapi_calls']}/{report['serpapi_budget']}")
     print(
-        f"Calls used: Travelpayouts {report['travelpayouts_calls']}/"
-        f"{report['travelpayouts_budget']}, SerpApi {report['serpapi_calls']}/"
-        f"{report['serpapi_budget']}"
+        f"Leg 1 mode: {report['leg1_cache_mode']} "
+        f"({report['leg1_cache_hits']} cache hits); "
+        f"Leg 2 mode: {report['leg2_cache_mode']} "
+        f"({report['leg2_cache_hits']} cache hits); "
+        f"combined mode: {report['combined_cache_mode']} "
+        f"({report['combined_cache_hits']} cache hits)"
     )
     print(
-        f"Eligible domestic 4-day combinations found: "
-        f"{report['domestic_combinations_found']}"
+        f"{report['leg1_origin']} → {report['leg1_destination']} dates searched: "
+        f"{report['leg1_dates_searched']}"
     )
     print(
-        f"Cheapest domestic combinations advanced: "
-        f"{report['domestic_combinations_selected']}"
+        f"{report['leg2_origin']} → {report['leg2_destination']} dates searched: "
+        f"{report['leg2_dates_searched']}"
     )
     print(
-        f"Airport/date international candidates available: "
-        f"{report['international_searches_available']}"
+        "Required gap between leg departure dates: "
+        f"{report['nights_between_departures']} nights"
     )
-    print(
-        f"International searches selected within the SerpApi budget: "
-        f"{report['international_searches_planned']}"
-    )
+    for leg in report["leg_stats"]:
+        print(
+            f"{leg['route']}: {leg['priced_dates']} priced dates out of "
+            f"{leg['dates_searched']} searches"
+        )
+        for error in leg["response_errors"]:
+            print(f"  SerpApi response error: {error}")
     print(f"Complete itineraries: {len(report['itineraries'])}")
-
-    itineraries_to_show = (
-        report["itineraries"]
-        if args.show_all else report["itineraries"][:5]
-    )
-    for index, itinerary in enumerate(itineraries_to_show, start=1):
-        domestic = itinerary["domestic"]
-        international = itinerary["international"]
-        print()
-        print(f"{index}. Total: INR {itinerary['total_price_inr']:,.2f}")
+    itineraries = report["itineraries"]
+    for index, itinerary in enumerate(itineraries, start=1):
+        first, second = itinerary["leg1"], itinerary["leg2"]
+        print(f"\n{index}. Total: INR {itinerary['total_price_inr']:,.2f}")
         print(
-            "   Domestic: "
-            f"MOW -> MMK {itinerary['domestic_departure_date']} | "
-            f"MMK -> MOW {itinerary['domestic_return_date']} | "
-            f"RUB {domestic['price']:,} = INR {itinerary['domestic_price_inr']:,.2f}"
+            f"   Leg 1: {report['leg1_origin']} → {first.get('arrival_airport') or report['leg1_destination']} "
+            f"{first['departure_date']} | INR {first['price']:,}"
         )
         print(
-            "   International: "
-            f"HYD -> MOW {international['departure_date']} | "
-            f"MOW -> HYD {international['return_date']} | "
-            f"INR {international['price']:,}"
+            f"   Leg 2: {second['departure_airport']} → HYD "
+            f"{second['departure_date']} | INR {second['price']:,}"
         )
+        comparison = itinerary.get("combined_search")
+        if comparison:
+            if comparison["status"] == "priced":
+                diff = comparison["difference_inr"]
+                label = "combined cheaper" if diff < 0 else "separate cheaper" if diff > 0 else "same price"
+                print(
+                    f"   Multi-city: INR {comparison['price_inr']:,} | "
+                    f"separate: INR {itinerary['total_price_inr']:,} | "
+                    f"{label} by INR {abs(diff):,.2f}"
+                )
+            else:
+                print(f"   Multi-city comparison: {comparison['status']} — {comparison.get('error', '')}")
 
 
 if __name__ == "__main__":

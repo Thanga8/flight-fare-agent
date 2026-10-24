@@ -1,34 +1,85 @@
 {% extends "base.html" %}
-{% block title %}Fare Path · Find your best route{% endblock %}
+{% block title %}Fare Path · Configurable multi-city search{% endblock %}
 {% block content %}
 <section class="hero">
-  <p class="eyebrow">HYDERABAD · MOSCOW · MURMANSK</p>
-  <h1>Plan the path,<br><em>not just the flight.</em></h1>
-  <p class="hero-copy">Find a low-cost HYD → Moscow → Murmansk itinerary with a four-day Arctic stay. We rank domestic dates first, then spend limited international-search credits only where they matter.</p>
+  <p class="eyebrow">FLEXIBLE MULTI-CITY SEARCH</p>
+  <h1>Build your<br><em>fare comparison.</em></h1>
+  <p class="hero-copy">Choose both flight legs, the gap between departures, and which searches use SerpApi or your local cache.</p>
 </section>
 
 <section class="search-panel" aria-labelledby="search-title">
   <div>
-    <p class="eyebrow">MULTI-LEG SEARCH</p>
-    <h2 id="search-title">Choose your flexible window</h2>
+    <p class="eyebrow">SEARCH CONFIGURATION</p>
+    <h2 id="search-title">Set your route and budget</h2>
   </div>
   {% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}
   <form method="post" action="{{ url_for('search') }}">
-    <div class="route-strip" aria-label="Itinerary route">
-      <span>HYD</span><i>→</i><span>MOW</span><i>→</i><span>MMK</span><i>→</i><span>MOW</span><i>→</i><span>HYD</span>
+    <div class="route-fields">
+      <fieldset>
+        <legend>Leg 1</legend>
+        <label>Origin airport or code group
+          <input name="leg1_origin" value="{{ form_data.leg1_origin }}" required autocomplete="off" placeholder="HYD">
+        </label>
+        <label>Destination airport or code group
+          <input name="leg1_destination" value="{{ form_data.leg1_destination }}" required autocomplete="off" placeholder="PAR">
+        </label>
+      </fieldset>
+      <fieldset>
+        <legend>Leg 2</legend>
+        <label>Origin airport or code group
+          <input name="leg2_origin" value="{{ form_data.leg2_origin }}" required autocomplete="off" placeholder="HEL">
+        </label>
+        <label>Destination airport or code group
+          <input name="leg2_destination" value="{{ form_data.leg2_destination }}" required autocomplete="off" placeholder="HYD">
+        </label>
+      </fieldset>
     </div>
+    <p class="field-hint">Use IATA airport codes, comma-separated airports, or supported groups such as PAR.</p>
+
     <div class="date-grid">
-      <label>Earliest international departure<input type="date" name="start_date" value="{{ start_date }}" required></label>
-      <label>Latest international return<input type="date" name="end_date" value="{{ end_date }}" required></label>
+      <label>Earliest Leg 1 departure<input type="date" name="start_date" value="{{ form_data.start_date }}" required></label>
+      <label>Latest Leg 2 departure<input type="date" name="end_date" value="{{ form_data.end_date }}" required></label>
     </div>
-    <div class="info-box"><strong>Search budget:</strong> up to 10 cached domestic-fare requests and {{ serpapi_budget }} SerpApi international searches. A search runs only after you press the button.</div>
+    <div class="config-grid">
+      <label>Nights between departure dates
+        <input type="number" name="nights_between_departures" value="{{ form_data.nights_between_departures }}" min="1" max="60" required>
+      </label>
+      <label>Maximum SerpApi calls
+        <input type="number" name="serpapi_budget" value="{{ form_data.serpapi_budget }}" min="0" max="{{ serpapi_budget }}" required>
+      </label>
+      <label>Combined candidates to compare
+        <input type="number" name="combined_candidate_limit" value="{{ form_data.combined_candidate_limit }}" min="0" max="50" required>
+      </label>
+    </div>
+
+    <div class="mode-fields">
+      <label>Leg 1 data
+        <select name="leg1_cache_mode">
+          <option value="live" {% if form_data.leg1_cache_mode == 'live' %}selected{% endif %}>Live search</option>
+          <option value="cache" {% if form_data.leg1_cache_mode == 'cache' %}selected{% endif %}>Use cache only</option>
+        </select>
+      </label>
+      <label>Leg 2 data
+        <select name="leg2_cache_mode">
+          <option value="live" {% if form_data.leg2_cache_mode == 'live' %}selected{% endif %}>Live search</option>
+          <option value="cache" {% if form_data.leg2_cache_mode == 'cache' %}selected{% endif %}>Use cache only</option>
+        </select>
+      </label>
+      <label>Combined comparison data
+        <select name="combined_cache_mode">
+          <option value="live" {% if form_data.combined_cache_mode == 'live' %}selected{% endif %}>Live search</option>
+          <option value="cache" {% if form_data.combined_cache_mode == 'cache' %}selected{% endif %}>Use cache only</option>
+        </select>
+      </label>
+    </div>
+    <div class="info-box"><strong>API usage:</strong> Live legs spend credits. Cache mode never falls back to live; a cache miss is reported. The budget is a maximum of {{ serpapi_budget }} calls.</div>
     <button type="submit">Search possible itineraries <span>→</span></button>
   </form>
 </section>
 
 <section class="principles">
-  <article><span>01</span><h3>Rank domestic first</h3><p>Cached MOW–MMK round-trip fares identify the ten cheapest date combinations.</p></article>
-  <article><span>02</span><h3>Use credits carefully</h3><p>Historical search priorities select the most promising Moscow airport and date combinations.</p></article>
-  <article><span>03</span><h3>Verify before booking</h3><p>Domestic fares are cached observations. Final fares and availability are always checked live.</p></article>
+  <article><span>01</span><h3>Flexible routes</h3><p>Configure both legs with airport codes or supported airport groups.</p></article>
+  <article><span>02</span><h3>Budget-aware</h3><p>Choose live or cached data independently for each leg and combined comparisons.</p></article>
+  <article><span>03</span><h3>Comparable results</h3><p>Rank date pairs by separate-leg total and compare the top candidates as multi-city trips.</p></article>
 </section>
 {% endblock %}

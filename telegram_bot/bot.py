@@ -69,8 +69,8 @@ async def help_command(update, context):
         "the latest fares.\n\n"
 
         "🧭 /multi_search\n"
-        "Search the combined HYD → MOW → MMK → MOW → HYD itinerary.\n"
-        "This can use up to 10 Travelpayouts and 20 SerpApi calls.\n\n"
+        "Search HYD → Paris and HEL → HYD one-way legs.\n"
+        "This can use up to 50 SerpApi calls.\n\n"
 
         "📊 /latest\n"
         "Show the results from your most recent search "
