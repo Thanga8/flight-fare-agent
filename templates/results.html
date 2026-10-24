@@ -5,6 +5,7 @@
   <p class="eyebrow">SEARCH COMPLETE</p>
   <h1>Promising multi-city date pairs.</h1>
   <p>{{ start_date }} to {{ end_date }} · {{ report.nights_between_departures }} nights between departures</p>
+  {% if report.budget_limited %}<p class="price-note"><strong>Partial search:</strong> the SerpApi budget was reached; some candidates were not checked.</p>{% endif %}
   <a class="back-link" href="{{ url_for('index') }}">← New search</a>
 </section>
 <section class="metrics" aria-label="Search usage">
@@ -43,5 +44,5 @@
   <div class="empty-state">No date pairs with both priced legs were found. Try a broader date window.</div>
   {% endfor %}
 </section>
-<aside class="price-note"><strong>About these prices</strong><p>Both one-way fares come from SerpApi. The combined price adds the two selected legs; any overland or separate travel between their endpoints is not included. Availability can change; links open fresh Google Flights searches.</p></aside>
+<aside class="price-note"><strong>About these prices</strong><p>Data modes: leg 1 {{ report.leg1_cache_mode }} ({{ report.leg1_cache_hits }} cache hits), leg 2 {{ report.leg2_cache_mode }} ({{ report.leg2_cache_hits }} cache hits), combined {{ report.combined_cache_mode }} ({{ report.combined_cache_hits }} cache hits). The combined price adds the two selected legs; any overland or separate travel between their endpoints is not included. Availability can change; links open fresh Google Flights searches.</p></aside>
 {% endblock %}

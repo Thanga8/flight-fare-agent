@@ -30,7 +30,14 @@ def _resolve_airport_codes(location: str) -> list[str]:
 
 
 def _sample_dates(start_date: str, end_date: str, limit: int) -> list[str]:
-    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    try:
+        start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Dates must be valid ISO calendar dates (YYYY-MM-DD).") from error
+    if end < start:
+        raise ValueError("The end date must be on or after the start date.")
+    if limit < 0:
+        raise ValueError("Date sampling limit cannot be negative.")
     days = (end - start).days + 1
     if days <= 0 or limit <= 0:
         return []
@@ -52,6 +59,7 @@ def _cheapest_flight(payload: dict, flight_date: str) -> dict | None:
         "departure_date": flight_date,
         "price": flight["price"],
         "duration": flight.get("total_duration"),
+        "departure_airport": (flight.get("flights", [{}])[0].get("departure_airport", {}).get("id") if flight.get("flights") else None),
         "arrival_airport": (
             flight.get("flights", [])[-1].get("arrival_airport", {}).get("id")
             if flight.get("flights") else None
@@ -85,9 +93,39 @@ def _cheapest_return_flights_by_airport(
             "duration": flight.get("total_duration"),
             "flight": flight,
         }
-        if airport not in cheapest or fare["price"] < cheapest[airport]["price"]:
-            cheapest[airport] = fare
+        arrival = segments[-1].get("arrival_airport", {}).get("id")
+        fare["arrival_airport"] = arrival
+        key = (airport, arrival)
+        if key not in cheapest or fare["price"] < cheapest[key]["price"]:
+            cheapest[key] = fare
     return cheapest
+
+
+class _BudgetedProvider:
+    """Gate every live SerpApi request at the provider call boundary."""
+    def __init__(self, provider, budget):
+        self.provider = provider
+        self.budget = budget
+        self.calls = 0
+        self.limited = budget == 0
+
+    def __getattr__(self, name):
+        return getattr(self.provider, name)
+
+    def _call(self, method, *args, cache_mode="live", **kwargs):
+        if cache_mode == "live":
+            if self.calls >= self.budget:
+                self.limited = True
+                return {"error": "BUDGET_EXHAUSTED: live search skipped", "_budget_exhausted": True, "_cache_hit": False}
+            self.calls += 1
+        result = method(*args, cache_mode=cache_mode, **kwargs)
+        return result
+
+    def search_one_way(self, *args, cache_mode="live", **kwargs):
+        return self._call(self.provider.search_one_way, *args, cache_mode=cache_mode, **kwargs)
+
+    def search_multi_city(self, *args, cache_mode="live", **kwargs):
+        return self._call(self.provider.search_multi_city, *args, cache_mode=cache_mode, **kwargs)
 
 
 def search_multi_leg_itineraries(
@@ -131,6 +169,7 @@ def search_multi_leg_itineraries(
     leg2_destinations = _resolve_airport_codes(leg2_destination)
     if not all((leg1_origins, leg1_destinations, leg2_origins, leg2_destinations)):
         raise ValueError("Each leg must specify an origin and destination.")
+    provider = _BudgetedProvider(international_provider, serpapi_budget)
     latest_first_departure = end - timedelta(days=nights)
     if latest_first_departure < start:
         candidate_dates = []
@@ -146,7 +185,7 @@ def search_multi_leg_itineraries(
         pair_budget = (
             available_pairs
             if live_leg_count == 0
-            else max(0, (serpapi_budget - combined_reserve) // live_leg_count)
+            else max(1, (serpapi_budget - combined_reserve) // live_leg_count) if serpapi_budget else 0
         )
         candidate_dates = _sample_dates(
             start.isoformat(), latest_first_departure.isoformat(), pair_budget
@@ -160,7 +199,7 @@ def search_multi_leg_itineraries(
         second_date = (
             date.fromisoformat(first_date) + timedelta(days=nights)
         ).isoformat()
-        outbound_payload = international_provider.search_one_way(
+        outbound_payload = provider.search_one_way(
             departure_id=",".join(leg1_origins),
             arrival_id=",".join(leg1_destinations),
             outbound_date=first_date,
@@ -175,7 +214,7 @@ def search_multi_leg_itineraries(
 
         # SerpApi accepts comma-separated airport codes. This uses one call
         # Search the Helsinki return leg on the same seven-night offset date.
-        return_payload = international_provider.search_one_way(
+        return_payload = provider.search_one_way(
             departure_id=",".join(leg2_origins),
             arrival_id=",".join(leg2_destinations),
             outbound_date=second_date,
@@ -220,14 +259,14 @@ def search_multi_leg_itineraries(
     combined_checks = []
     combined_calls = 0
     combined_cache_hits = 0
-    if not hasattr(international_provider, "search_multi_city"):
+    if not hasattr(provider, "search_multi_city"):
         if combined_candidate_limit:
             raise ValueError("Provider does not support multi-city searches.")
     for itinerary in itineraries[:combined_candidate_limit]:
         outbound = itinerary["leg1"]
         inbound = itinerary["leg2"]
         paris_airport = outbound.get("arrival_airport")
-        if not paris_airport:
+        if not paris_airport or not outbound.get("departure_airport") or not inbound.get("arrival_airport"):
             comparison = {
                 "status": "missing_airport",
                 "error": "Separate-leg result did not identify its Paris arrival airport.",
@@ -235,22 +274,25 @@ def search_multi_leg_itineraries(
         else:
             multi_city_legs = [
                 {
-                    "departure_id": ",".join(leg1_origins),
+                    "departure_id": outbound["departure_airport"],
                     "arrival_id": paris_airport,
                     "date": outbound["departure_date"],
                 },
                 {
                     "departure_id": inbound["departure_airport"],
-                    "arrival_id": ",".join(leg2_destinations),
+                    "arrival_id": inbound["arrival_airport"],
                     "date": inbound["departure_date"],
                 },
             ]
-            payload = international_provider.search_multi_city(
+            payload = provider.search_multi_city(
                 multi_city_legs, cache_mode=combined_cache_mode
             )
             combined_cache_hits += int(bool(payload.get("_cache_hit")))
-            if combined_cache_mode == "live":
-                combined_calls += 1
+            if payload.get("_budget_exhausted"):
+                comparison = {"status": "budget_exhausted", "error": payload["error"], "legs": multi_city_legs}
+                itinerary["combined_search"] = comparison
+                combined_checks.append({"separate_total_inr": itinerary["total_price_inr"], **comparison})
+                continue
             combined_fare = _cheapest_flight(payload, outbound["departure_date"])
             if combined_fare:
                 difference = round(
@@ -281,9 +323,8 @@ def search_multi_leg_itineraries(
         })
     return {
         "itineraries": itineraries,
-        "serpapi_calls": len(candidate_dates) * (
-            int(leg1_cache_mode == "live") + int(leg2_cache_mode == "live")
-        ) + combined_calls,
+        "serpapi_calls": provider.calls,
+        "budget_limited": provider.limited,
         "provider_queries": len(candidate_dates) * 2,
         "serpapi_budget": serpapi_budget,
         "leg1_dates_searched": len(candidate_dates),

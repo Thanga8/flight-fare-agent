@@ -13,6 +13,8 @@ def format_multi_leg_report(report):
     lines = [
         "MULTI-CITY FARE RESULTS",
         f"SerpApi calls: {report['serpapi_calls']}/{report['serpapi_budget']}",
+        f"Data modes: leg 1 {report['leg1_cache_mode']}, leg 2 {report['leg2_cache_mode']}, combined {report['combined_cache_mode']}.",
+        *( ["Partial search: SerpApi budget reached; some candidates were not checked."] if report.get("budget_limited") else [] ),
         "",
     ]
     if not report["itineraries"]:
