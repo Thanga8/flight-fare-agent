@@ -42,7 +42,7 @@
       {% if insight.insights.lowest_price is defined %}<p>Lowest returned price: {{ insight.insights.lowest_price }} {{ insight.currency }}</p>{% endif %}
       {% if insight.insights.price_level is defined %}<p>Price level: {{ insight.insights.price_level }}</p>{% endif %}
       {% if insight.price_points %}
-        <h4>Google-provided historical price points</h4>
+        <h4>Google historical fare trend</h4>
         <svg class="history-chart" viewBox="0 0 600 260" role="img" aria-label="Google-provided historical prices with date and {{ insight.currency }} fare axes">
           {% for tick in insight.chart.y_ticks %}<line x1="76" y1="{{ tick.y }}" x2="580" y2="{{ tick.y }}" class="chart-grid" />{% endfor %}
           <line x1="76" y1="24" x2="76" y2="190" class="chart-axis" />
@@ -54,7 +54,6 @@
           <text x="328" y="244" class="chart-axis-title" text-anchor="middle">Observation date (UTC)</text>
           <text x="18" y="107" transform="rotate(-90 18 107)" class="chart-axis-title" text-anchor="middle">Fare ({{ insight.currency }})</text>
         </svg>
-        <ul>{% for point in insight.price_points %}<li>{{ point.label }}</li>{% endfor %}</ul>
       {% endif %}
       {% if not insight.has_other_insights %}<p>No other valid Google insight fields were provided.</p>{% endif %}
     {% endif %}

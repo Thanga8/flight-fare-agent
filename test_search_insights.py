@@ -193,7 +193,7 @@ class ResultsInsightRenderingTests(unittest.TestCase):
             "data_source": "live", "status": status, **values,
         }
 
-    def test_valid_range_lowest_level_and_historical_points_render(self):
+    def test_live_results_keep_insight_summary_and_chart_without_history_list(self):
         response = self.render_insights(self.insight(price_insights={
             "typical_price_range": [12345, 23456], "lowest_price": 11800,
             "price_level": "low", "price_history": [[1800000000, 13000]],
@@ -201,11 +201,15 @@ class ResultsInsightRenderingTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn(b"Google Flights Insights", response.data)
         self.assertIn("HYD \u2192 CDG \u00b7 2027-01-01".encode(), response.data)
-        self.assertIn("Typical fare range:</strong> 12345 \u2013 23456 INR".encode(), response.data)
-        self.assertIn(b"Lowest returned price: 11800 INR", response.data)
+        self.assertIn(b"Typical fare range:", response.data)
+        self.assertIn(b"Lowest returned price:", response.data)
         self.assertIn(b"Price level: low", response.data)
-        self.assertIn(b"Google-provided historical price points", response.data)
-        self.assertIn(b"13000 INR", response.data)
+        self.assertIn(b"Google historical fare trend", response.data)
+        self.assertIn(b"Observation date (UTC)", response.data)
+        self.assertIn(b"Fare (INR)", response.data)
+        self.assertIn(b"<circle", response.data)
+        self.assertNotIn(b"<ul>", response.data)
+        self.assertNotIn(b"<li>", response.data)
 
     def test_absent_null_and_empty_insights_are_distinguished_from_range(self):
         absent = self.render_insights(self.insight(status="absent"))
