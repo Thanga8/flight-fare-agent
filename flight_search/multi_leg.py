@@ -51,6 +51,69 @@ def _sample_dates(start_date: str, end_date: str, limit: int) -> list[str]:
     return [(start + timedelta(days=offset)).isoformat() for offset in sorted(offsets)]
 
 
+def plan_multi_leg_usage(
+    start_date: str,
+    end_date: str,
+    nights_between_departures: int,
+    serpapi_budget: int,
+    leg1_cache_mode: str = "live",
+    leg2_cache_mode: str = "live",
+    combined_cache_mode: str = "live",
+    combined_candidate_limit: int = 0,
+) -> dict:
+    """Estimate date coverage and request bounds using the search's budget rules.
+
+    Combined calls are candidate-dependent, so their returned count is a maximum,
+    bounded by both the candidate limit and budget remaining after leg searches.
+    """
+    if nights_between_departures < 1:
+        raise ValueError("The nights between departures must be at least 1.")
+    if serpapi_budget < 0:
+        raise ValueError("Provider budgets cannot be negative.")
+    if any(mode not in {"live", "cache"} for mode in (
+        leg1_cache_mode, leg2_cache_mode, combined_cache_mode
+    )):
+        raise ValueError("Cache modes must be 'live' or 'cache'.")
+    if combined_candidate_limit < 0:
+        raise ValueError("Combined candidate limit cannot be negative.")
+    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    if end < start:
+        raise ValueError("The end date must be on or after the start date.")
+    latest_first_departure = end - timedelta(days=nights_between_departures)
+    pair_count = max(0, (latest_first_departure - start).days + 1)
+    live_leg_count = int(leg1_cache_mode == "live") + int(leg2_cache_mode == "live")
+    if live_leg_count:
+        covered_pairs = min(pair_count, serpapi_budget // live_leg_count)
+    else:
+        covered_pairs = pair_count
+    leg1_calls = covered_pairs if leg1_cache_mode == "live" else 0
+    leg2_calls = covered_pairs if leg2_cache_mode == "live" else 0
+    exhaustive_leg_calls = pair_count * live_leg_count
+    remaining = max(0, serpapi_budget - leg1_calls - leg2_calls)
+    combined_max = (
+        min(combined_candidate_limit, remaining)
+        if combined_cache_mode == "live" else 0
+    )
+    exhaustive_combined_max = (
+        combined_candidate_limit if combined_cache_mode == "live" else 0
+    )
+    return {
+        "valid_date_pairs": pair_count,
+        "covered_date_pairs": covered_pairs,
+        "full_date_coverage": covered_pairs == pair_count,
+        "leg1_live_requests": leg1_calls,
+        "leg2_live_requests": leg2_calls,
+        "leg_live_requests": leg1_calls + leg2_calls,
+        "exhaustive_leg_live_requests": exhaustive_leg_calls,
+        "combined_live_requests_max": combined_max,
+        "exhaustive_combined_live_requests_max": exhaustive_combined_max,
+        "configured_total_live_requests_max": leg1_calls + leg2_calls + combined_max,
+        "exhaustive_total_live_requests_max": exhaustive_leg_calls + exhaustive_combined_max,
+        "remaining_budget_after_leg_searches": remaining,
+        "remaining_budget_after_max_combined": remaining - combined_max,
+    }
+
+
 def _cheapest_flight(payload: dict, flight_date: str) -> dict | None:
     flights = payload.get("best_flights", []) + payload.get("other_flights", [])
     priced = [flight for flight in flights if flight.get("price") is not None]
@@ -270,6 +333,11 @@ def search_multi_leg_itineraries(
         raise ValueError("The end date must be on or after the start date.")
 
     nights = nights_between_departures
+    usage_plan = plan_multi_leg_usage(
+        start_date, end_date, nights, serpapi_budget,
+        leg1_cache_mode, leg2_cache_mode, combined_cache_mode,
+        combined_candidate_limit,
+    )
     leg1_origins = _resolve_airport_codes(leg1_origin)
     leg1_destinations = _resolve_airport_codes(leg1_destination)
     leg2_origins = _resolve_airport_codes(leg2_origin)
@@ -279,28 +347,20 @@ def search_multi_leg_itineraries(
     provider = _BudgetedProvider(international_provider, serpapi_budget)
     incomplete_reason = None
     latest_first_departure = end - timedelta(days=nights)
-    if latest_first_departure < start:
-        candidate_dates = []
-    else:
-        # Fund complete date pairs first. Combined checks can use only budget
-        # left after every selected pair has had both legs searched.
-        live_leg_count = int(leg1_cache_mode == "live") + int(leg2_cache_mode == "live")
-        available_pairs = (latest_first_departure - start).days + 1
-        pair_budget = (
-            available_pairs
-            if live_leg_count == 0
-            else min(available_pairs, serpapi_budget // live_leg_count)
+    available_pairs = usage_plan["valid_date_pairs"]
+    pair_budget = usage_plan["covered_date_pairs"]
+    if usage_plan["leg_live_requests"] < usage_plan["exhaustive_leg_live_requests"]:
+        provider.limited = True
+    if available_pairs and pair_budget == 0 and (
+        leg1_cache_mode == "live" or leg2_cache_mode == "live"
+    ):
+        incomplete_reason = (
+            "Budget is too small to search both legs of even one date pair; "
+            "no complete date pair was priced."
         )
-        if live_leg_count and pair_budget < available_pairs:
-            provider.limited = True
-        if available_pairs and live_leg_count and pair_budget == 0:
-            incomplete_reason = (
-                "Budget is too small to search both legs of even one date pair; "
-                "no complete date pair was priced."
-            )
-        candidate_dates = _sample_dates(
-            start.isoformat(), latest_first_departure.isoformat(), pair_budget
-        )
+    candidate_dates = _sample_dates(
+        start.isoformat(), latest_first_departure.isoformat(), pair_budget
+    ) if available_pairs else []
 
     paris_fares = {}
     return_fares = {}

@@ -1,7 +1,7 @@
 import unittest
 import requests
 from unittest.mock import patch
-from flight_search.multi_leg import _sample_dates, search_multi_leg_itineraries
+from flight_search.multi_leg import _resolve_airport_codes, _sample_dates, plan_multi_leg_usage, search_multi_leg_itineraries
 
 
 def payload(depart, arrive, price=100):
@@ -11,9 +11,10 @@ def payload(depart, arrive, price=100):
 
 
 class Provider:
-    def __init__(self): self.calls = []; self.combined_legs = []
+    def __init__(self): self.calls = []; self.combined_legs = []; self.one_way_queries = []
     def search_one_way(self, departure_id, arrival_id, outbound_date, cache_mode):
         self.calls.append(("one", cache_mode))
+        self.one_way_queries.append((departure_id, arrival_id, outbound_date))
         if cache_mode == "cache": return payload(departure_id.split(",")[0], arrival_id.split(",")[0]) | {"_cache_hit": True}
         return payload("HYD", "CDG") if "HYD" in departure_id else payload("HEL", "HYD")
     def search_multi_city(self, legs, cache_mode):
@@ -111,6 +112,64 @@ class MultiLegTests(unittest.TestCase):
             self.assertEqual(7, (date.fromisoformat(item["leg2"]["departure_date"]) - date.fromisoformat(item["leg1"]["departure_date"])).days)
             self.assertEqual("HYD", item["leg1"]["departure_airport"])
             self.assertEqual("HYD", item["leg2"]["arrival_airport"])
+
+    def test_usage_plan_inclusive_pairs_and_single_pair(self):
+        plan = plan_multi_leg_usage("2027-02-03", "2027-03-15", 7, 100)
+        self.assertEqual(34, plan["valid_date_pairs"])
+        self.assertEqual(34, plan["covered_date_pairs"])
+        one = plan_multi_leg_usage("2027-02-03", "2027-02-10", 7, 2, combined_candidate_limit=0)
+        self.assertEqual(1, one["valid_date_pairs"])
+        leap = plan_multi_leg_usage("2024-02-28", "2024-03-07", 2, 20)
+        self.assertEqual(7, leap["valid_date_pairs"])
+
+    def test_usage_plan_short_window_reverse_dates_and_invalid_inputs(self):
+        short = plan_multi_leg_usage("2027-02-03", "2027-02-09", 7, 10)
+        self.assertEqual(0, short["valid_date_pairs"])
+        with self.assertRaisesRegex(ValueError, "on or after"):
+            plan_multi_leg_usage("2027-02-11", "2027-02-10", 1, 10)
+        for args in (("", "2027-02-10", 1, 2), ("bad", "2027-02-10", 1, 2)):
+            with self.assertRaises(ValueError):
+                plan_multi_leg_usage(*args)
+
+    def test_usage_plan_independent_cache_modes_and_budget(self):
+        args = ("2027-02-03", "2027-02-12", 7, 4)
+        both = plan_multi_leg_usage(*args)
+        self.assertEqual((3, 2), (both["valid_date_pairs"], both["covered_date_pairs"]))
+        self.assertEqual((2, 2), (both["leg1_live_requests"], both["leg2_live_requests"]))
+        leg1_only = plan_multi_leg_usage(*args, leg2_cache_mode="cache", combined_candidate_limit=0)
+        self.assertEqual((3, 3, 0), (leg1_only["covered_date_pairs"], leg1_only["leg1_live_requests"], leg1_only["leg2_live_requests"]))
+        leg2_only = plan_multi_leg_usage(*args, leg1_cache_mode="cache", combined_candidate_limit=0)
+        self.assertEqual((3, 0, 3), (leg2_only["covered_date_pairs"], leg2_only["leg1_live_requests"], leg2_only["leg2_live_requests"]))
+        cache_only = plan_multi_leg_usage(*args, leg1_cache_mode="cache", leg2_cache_mode="cache")
+        self.assertEqual(3, cache_only["covered_date_pairs"])
+        self.assertEqual(0, cache_only["leg_live_requests"])
+        self.assertFalse(both["full_date_coverage"])
+        self.assertEqual(0, plan_multi_leg_usage(*args[:3], 0)["covered_date_pairs"])
+
+    def test_combined_calls_are_candidate_and_budget_limited_maxima(self):
+        args = ("2027-02-03", "2027-02-12", 7, 7)
+        no_candidates = plan_multi_leg_usage(*args, combined_candidate_limit=0)
+        self.assertEqual(0, no_candidates["configured_total_live_requests_max"] - no_candidates["leg_live_requests"])
+        cache_combined = plan_multi_leg_usage(*args, combined_cache_mode="cache", combined_candidate_limit=5)
+        self.assertEqual(0, cache_combined["exhaustive_combined_live_requests_max"])
+        live_combined = plan_multi_leg_usage(*args, combined_candidate_limit=5)
+        self.assertEqual(1, live_combined["combined_live_requests_max"])
+        self.assertEqual(5, live_combined["exhaustive_combined_live_requests_max"])
+        self.assertLessEqual(live_combined["configured_total_live_requests_max"], 7)
+
+    def test_airport_group_remains_one_provider_request_per_leg(self):
+        provider = Provider()
+        with patch("flight_search.multi_leg.persist_multi_leg_search", return_value=1):
+            search_multi_leg_itineraries(
+                start_date="2027-01-01", end_date="2027-01-08", international_provider=provider,
+                serpapi_budget=2, leg1_origin="PAR", leg1_destination="HYD",
+                leg2_origin="HEL", leg2_destination="HYD", combined_cache_mode="cache",
+                combined_candidate_limit=0,
+            )
+        group_codes = _resolve_airport_codes("PAR")
+        self.assertGreater(len(group_codes), 1)
+        self.assertEqual(",".join(group_codes), provider.one_way_queries[0][0])
+        self.assertEqual(2, len(provider.one_way_queries))
 
 
 if __name__ == "__main__": unittest.main()

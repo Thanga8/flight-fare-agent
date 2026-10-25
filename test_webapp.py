@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from webapp import _booking_links, app
@@ -14,6 +15,19 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn(b"Search possible itineraries", response.data)
         self.assertIn(b'name="viewport"', response.data)
+        self.assertIn(b"API Usage Preview", response.data)
+        self.assertIn(b"api_usage_preview.js", response.data)
+
+    def test_preview_script_reacts_to_all_planning_controls_without_network_calls(self):
+        script = (Path(__file__).parent / "static" / "api_usage_preview.js").read_text(encoding="utf-8")
+        for name in (
+            "start_date", "end_date", "nights_between_departures", "serpapi_budget",
+            "leg1_cache_mode", "leg2_cache_mode", "combined_candidate_limit", "combined_cache_mode",
+        ):
+            self.assertIn(f"'{name}'", script)
+        self.assertIn("addEventListener('input', updatePreview)", script)
+        self.assertNotIn("fetch(", script)
+        self.assertNotIn("XMLHttpRequest", script)
 
     def test_invalid_date_window_does_not_call_providers(self):
         with patch("webapp.SerpApiProvider") as provider_factory, patch(

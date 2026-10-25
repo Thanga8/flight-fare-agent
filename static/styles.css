@@ -20,6 +20,10 @@ body { margin:0; font-family:Inter, ui-sans-serif, system-ui, -apple-system, Bli
 .config-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:20px; }
 .mode-fields { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-top:20px; }
 .search-panel .info-box { border-top:1px solid #3a4e68; padding-top:16px; }
+.usage-preview { margin-top:22px; padding:18px; border:1px solid #52647a; color:#e7edf6; font-size:.88rem; }
+.usage-preview h3 { margin:0 0 12px; font-size:1.05rem; color:#fff; }
+.usage-preview p { margin:7px 0; }
+.usage-preview .preview-note { color:#b9c6d8; font-size:.8rem; }
 .itinerary-card .price-note { margin:25px 0 22px; padding:15px 0 0; }
 .primary-nav { display:flex; align-items:center; gap:20px; }
 .primary-nav-link { color:var(--muted); text-decoration:none; font-size:.84rem; font-weight:700; padding:8px 0; border-bottom:2px solid transparent; }

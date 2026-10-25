@@ -72,10 +72,21 @@
         </select>
       </label>
     </div>
+    <section class="usage-preview" aria-labelledby="usage-preview-title" aria-live="polite">
+      <h3 id="usage-preview-title">API Usage Preview</h3>
+      <p id="usage-preview-coverage"></p>
+      <p id="usage-preview-legs"></p>
+      <p id="usage-preview-combined"></p>
+      <p id="usage-preview-totals"></p>
+      <p id="usage-preview-budget"></p>
+      <p class="preview-note">Request figures are estimates. Combined calls depend on returned priced itineraries; cache-only mode can miss and never falls back to live.</p>
+    </section>
     <div class="info-box"><strong>API usage:</strong> Live legs spend credits. Cache mode never falls back to live; a cache miss is reported. The budget is a maximum of {{ serpapi_budget }} calls.</div>
     <button type="submit">Search possible itineraries <span>→</span></button>
   </form>
 </section>
+
+<script src="{{ url_for('static', filename='api_usage_preview.js') }}" defer></script>
 
 <section class="principles">
   <article><span>01</span><h3>Flexible routes</h3><p>Configure both legs with airport codes or supported airport groups.</p></article>
