@@ -10,6 +10,7 @@ from datetime import date, datetime, timezone
 from flask import Flask, render_template, request
 
 from flight_search.config.settings import (
+    MAX_WEB_SERPAPI_BUDGET,
     MULTI_LEG_COMBINED_CANDIDATE_LIMIT,
     MULTI_LEG_END_DATE,
     MULTI_LEG_LEG1_DESTINATION,
@@ -29,7 +30,6 @@ from flight_search.multi_leg import search_multi_leg_itineraries
 from flight_search.providers.serpapi_provider import SerpApiProvider
 
 
-MAX_WEB_SERPAPI_BUDGET = MULTI_LEG_SERPAPI_BUDGET
 app = Flask(__name__)
 
 
@@ -42,7 +42,7 @@ def _default_form_data():
         "leg2_origin": MULTI_LEG_LEG2_ORIGIN,
         "leg2_destination": MULTI_LEG_LEG2_DESTINATION,
         "nights_between_departures": str(MULTI_LEG_NIGHTS_BETWEEN_DEPARTURES),
-        "serpapi_budget": str(MAX_WEB_SERPAPI_BUDGET),
+        "serpapi_budget": str(MULTI_LEG_SERPAPI_BUDGET),
         "combined_candidate_limit": str(MULTI_LEG_COMBINED_CANDIDATE_LIMIT),
         "leg1_cache_mode": "live",
         "leg2_cache_mode": "live",

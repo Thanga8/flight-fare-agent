@@ -2,6 +2,10 @@
 # SEARCH CONFIGURATION
 # ==========================================
 
+import os
+
+from dotenv import load_dotenv
+
 ORIGIN = "HYD"
 DESTINATION = "MOW"
 
@@ -18,7 +22,37 @@ MAX_SEARCHES = 4
 # EXPERIMENTAL MULTI-CITY ITINERARY
 # ==========================================
 
-MULTI_LEG_SERPAPI_BUDGET = 50
+load_dotenv()
+
+DEFAULT_MULTI_LEG_SERPAPI_BUDGET = 50
+
+
+def _read_max_web_serpapi_budget(value=None):
+    """Read a non-negative web search budget ceiling from the environment value."""
+    if value is None:
+        value = os.getenv("MAX_WEB_SERPAPI_BUDGET")
+    if value is None:
+        return 250
+    try:
+        maximum = int(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "MAX_WEB_SERPAPI_BUDGET must be a non-negative integer; "
+            f"received {value!r}."
+        ) from error
+    if maximum < 0:
+        raise ValueError(
+            "MAX_WEB_SERPAPI_BUDGET must be a non-negative integer; "
+            f"received {value!r}."
+        )
+    return maximum
+
+
+MAX_WEB_SERPAPI_BUDGET = _read_max_web_serpapi_budget()
+MULTI_LEG_SERPAPI_BUDGET = min(
+    DEFAULT_MULTI_LEG_SERPAPI_BUDGET,
+    MAX_WEB_SERPAPI_BUDGET,
+)
 MULTI_LEG_START_DATE = "2027-02-03"
 MULTI_LEG_END_DATE = "2027-03-15"
 MULTI_LEG_NIGHTS_BETWEEN_DEPARTURES = 7

@@ -81,7 +81,7 @@
       <p id="usage-preview-budget"></p>
       <p class="preview-note">Request figures are estimates. Combined calls depend on returned priced itineraries; cache-only mode can miss and never falls back to live.</p>
     </section>
-    <div class="info-box"><strong>API usage:</strong> Live legs spend credits. Cache mode never falls back to live; a cache miss is reported. The budget is a maximum of {{ serpapi_budget }} calls.</div>
+    <div class="info-box"><strong>API usage:</strong> Live legs use API requests. Cache mode never falls back to live; a cache miss is reported. This search can use up to {{ serpapi_budget }} requests; the budget is a ceiling, not a target.</div>
     <button type="submit">Search possible itineraries <span>→</span></button>
   </form>
 </section>

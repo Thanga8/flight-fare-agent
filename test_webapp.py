@@ -1,8 +1,12 @@
 import unittest
+import importlib
+import os
 from pathlib import Path
 from unittest.mock import patch
 
+import webapp as webapp_module
 from webapp import _booking_links, app
+from flight_search.config import settings
 
 
 class WebAppTests(unittest.TestCase):
@@ -17,6 +21,56 @@ class WebAppTests(unittest.TestCase):
         self.assertIn(b'name="viewport"', response.data)
         self.assertIn(b"API Usage Preview", response.data)
         self.assertIn(b"api_usage_preview.js", response.data)
+        self.assertIn(b'name="serpapi_budget" value="50" min="0" max="250"', response.data)
+
+    def test_budget_default_and_maximum_settings(self):
+        self.assertEqual(50, settings.DEFAULT_MULTI_LEG_SERPAPI_BUDGET)
+        self.assertEqual(50, settings.MULTI_LEG_SERPAPI_BUDGET)
+        self.assertEqual(250, settings.MAX_WEB_SERPAPI_BUDGET)
+
+    def test_custom_budget_maximum_environment_value_is_respected(self):
+        with patch.dict(os.environ, {"MAX_WEB_SERPAPI_BUDGET": "175"}, clear=True):
+            importlib.reload(settings)
+            importlib.reload(webapp_module)
+            self.assertEqual(175, settings.MAX_WEB_SERPAPI_BUDGET)
+            self.assertEqual(175, webapp_module.MAX_WEB_SERPAPI_BUDGET)
+            self.assertEqual(50, settings.MULTI_LEG_SERPAPI_BUDGET)
+        importlib.reload(settings)
+        importlib.reload(webapp_module)
+
+    def test_default_budget_is_capped_when_custom_maximum_is_below_50(self):
+        with patch.dict(os.environ, {"MAX_WEB_SERPAPI_BUDGET": "20"}, clear=True):
+            importlib.reload(settings)
+            self.assertEqual(20, settings.MULTI_LEG_SERPAPI_BUDGET)
+        importlib.reload(settings)
+
+    def test_invalid_budget_maximum_environment_value_has_clear_error(self):
+        with patch.dict(os.environ, {"MAX_WEB_SERPAPI_BUDGET": "not-a-number"}, clear=True):
+            with self.assertRaisesRegex(ValueError, "MAX_WEB_SERPAPI_BUDGET must be a non-negative integer"):
+                importlib.reload(settings)
+        importlib.reload(settings)
+
+    def test_search_accepts_budget_above_default_and_rejects_above_maximum(self):
+        form = {
+            "start_date": "2027-02-03", "end_date": "2027-03-15",
+            "nights_between_departures": "7", "serpapi_budget": "200",
+            "combined_candidate_limit": "0", "leg1_origin": "HYD",
+            "leg1_destination": "PAR", "leg2_origin": "HEL",
+            "leg2_destination": "HYD", "leg1_cache_mode": "cache",
+            "leg2_cache_mode": "cache", "combined_cache_mode": "cache",
+        }
+        report = {"itineraries": [], "google_insights": []}
+        with patch("webapp.SerpApiProvider"), patch(
+            "webapp.search_multi_leg_itineraries", return_value=report
+        ) as search:
+            accepted = self.client.post("/search", data=form)
+            self.assertEqual(200, accepted.status_code)
+            self.assertEqual(200, search.call_args.kwargs["serpapi_budget"])
+            form["serpapi_budget"] = "251"
+            rejected = self.client.post("/search", data=form)
+        self.assertEqual(400, rejected.status_code)
+        self.assertIn(b"SerpApi budget must be between 0 and 250.", rejected.data)
+        self.assertEqual(1, search.call_count)
 
     def test_preview_script_reacts_to_all_planning_controls_without_network_calls(self):
         script = (Path(__file__).parent / "static" / "api_usage_preview.js").read_text(encoding="utf-8")
