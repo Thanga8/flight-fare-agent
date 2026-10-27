@@ -31,7 +31,7 @@ def _resolve_airport_codes(location: str) -> list[str]:
     return list(dict.fromkeys(codes))
 
 
-def _sample_dates(start_date: str, end_date: str, limit: int) -> list[str]:
+def _sample_dates(start_date: str, end_date: str, limit: int, cursor: int = 0) -> list[str]:
     try:
         start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
     except (TypeError, ValueError) as error:
@@ -46,9 +46,15 @@ def _sample_dates(start_date: str, end_date: str, limit: int) -> list[str]:
     count = min(days, limit)
     if count == 1:
         return [start.isoformat()]
-    # Spread a small search budget across the full flexible window.
-    offsets = {(index * (days - 1)) // (count - 1) for index in range(count)}
-    return [(start + timedelta(days=offset)).isoformat() for offset in sorted(offsets)]
+    # Keep the endpoints as stable comparison anchors and rotate interior dates.
+    anchor_offsets = {0, days - 1}
+    interior = list(range(1, days - 1))
+    if interior:
+        shift = cursor % len(interior)
+        interior = interior[shift:] + interior[:shift]
+    offsets = set(anchor_offsets)
+    offsets.update(interior[:max(0, count - len(offsets))])
+    return [(start + timedelta(days=offset)).isoformat() for offset in sorted(offsets)][:count]
 
 
 def plan_multi_leg_usage(
@@ -60,6 +66,7 @@ def plan_multi_leg_usage(
     leg2_cache_mode: str = "live",
     combined_cache_mode: str = "live",
     combined_candidate_limit: int = 0,
+    rotation_cursor: int = 0,
 ) -> dict:
     """Estimate date coverage and request bounds using the search's budget rules.
 
@@ -82,8 +89,12 @@ def plan_multi_leg_usage(
     latest_first_departure = end - timedelta(days=nights_between_departures)
     pair_count = max(0, (latest_first_departure - start).days + 1)
     live_leg_count = int(leg1_cache_mode == "live") + int(leg2_cache_mode == "live")
+    minimum_pair_calls = min(pair_count, live_leg_count)
+    reserve = (min(combined_candidate_limit, max(0, serpapi_budget - minimum_pair_calls))
+               if combined_cache_mode == "live" else 0)
+    pair_budget_limit = max(0, serpapi_budget - reserve)
     if live_leg_count:
-        covered_pairs = min(pair_count, serpapi_budget // live_leg_count)
+        covered_pairs = min(pair_count, pair_budget_limit // live_leg_count)
     else:
         covered_pairs = pair_count
     leg1_calls = covered_pairs if leg1_cache_mode == "live" else 0
@@ -313,6 +324,7 @@ def search_multi_leg_itineraries(
     leg2_cache_mode="live",
     combined_cache_mode="live",
     combined_candidate_limit=MULTI_LEG_COMBINED_CANDIDATE_LIMIT,
+    rotation_cursor=0,
 ):
     """Search each one-way route within budget and rank valid date pairs.
 
@@ -336,7 +348,7 @@ def search_multi_leg_itineraries(
     usage_plan = plan_multi_leg_usage(
         start_date, end_date, nights, serpapi_budget,
         leg1_cache_mode, leg2_cache_mode, combined_cache_mode,
-        combined_candidate_limit,
+        combined_candidate_limit, rotation_cursor,
     )
     leg1_origins = _resolve_airport_codes(leg1_origin)
     leg1_destinations = _resolve_airport_codes(leg1_destination)
@@ -359,7 +371,7 @@ def search_multi_leg_itineraries(
             "no complete date pair was priced."
         )
     candidate_dates = _sample_dates(
-        start.isoformat(), latest_first_departure.isoformat(), pair_budget
+        start.isoformat(), latest_first_departure.isoformat(), pair_budget, rotation_cursor
     ) if available_pairs else []
 
     paris_fares = {}
@@ -561,6 +573,7 @@ def search_multi_leg_itineraries(
         "incomplete_reason": incomplete_reason,
         "provider_queries": len(candidate_dates) * 2,
         "serpapi_budget": serpapi_budget,
+        "planned_usage": usage_plan,
         "leg1_dates_searched": len(candidate_dates),
         "leg2_dates_searched": len(candidate_dates),
         "leg_stats": leg_stats,

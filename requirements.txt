@@ -2,3 +2,4 @@ serpapi
 python-dotenv
 requests
 Flask
+tzdata

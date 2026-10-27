@@ -5,9 +5,12 @@ from __future__ import annotations
 import os
 import json
 import math
-from datetime import date, datetime, timezone
+import hmac
+from datetime import date, datetime, timezone, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from functools import wraps
 
-from flask import Flask, render_template, request
+from flask import Flask, render_template, request, session, redirect, url_for, jsonify, abort
 
 from flight_search.config.settings import (
     MAX_WEB_SERPAPI_BUDGET,
@@ -25,12 +28,218 @@ from flight_search.google_flights_url import build_google_flights_url
 from flight_search.database.db import (
     get_multi_leg_google_insights,
     get_multi_leg_historical_prices,
+    initialize_database, save_monitor_job, get_monitor_job, list_monitor_jobs,
+    delete_monitor_job, claim_monitor_run, finish_monitor_run, list_monitor_runs,
+    mark_monitor_notification,
 )
 from flight_search.multi_leg import search_multi_leg_itineraries
 from flight_search.providers.serpapi_provider import SerpApiProvider
 
 
 app = Flask(__name__)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "")
+MONITOR_MAX_BUDGET = min(MAX_WEB_SERPAPI_BUDGET, int(os.getenv("MONITOR_MAX_SERPAPI_BUDGET", "12")))
+MONITOR_DEFAULT_BUDGET = min(6, MONITOR_MAX_BUDGET)
+MONITOR_INTERVALS = {1, 2, 3, 7}
+
+
+def _authorized():
+    owner_password = os.getenv("MONITOR_OWNER_PASSWORD", "")
+    return bool(owner_password and app.secret_key and session.get("monitor_owner"))
+
+
+def monitor_auth_required(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if not _authorized():
+            if request.path.startswith("/api/"):
+                return jsonify(error="Monitoring login required."), 401
+            return redirect(url_for("monitor_login", next=request.path))
+        return function(*args, **kwargs)
+    return wrapped
+
+
+def _next_run(interval_days, timezone_name):
+    now = datetime.now(ZoneInfo(timezone_name))
+    return (now + timedelta(days=interval_days)).astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
+def _monitor_config(data, current=None):
+    def value(key, default=""):
+        return data.get(key, current.get(key, default) if current else default)
+    name = str(value("name", "Fare watch")).strip()[:80]
+    if not name:
+        raise ValueError("Enter a monitoring job name.")
+    start_date, end_date = str(value("start_date")), str(value("end_date"))
+    start, end = date.fromisoformat(start_date), date.fromisoformat(end_date)
+    if end < start:
+        raise ValueError("End date must be on or after start date.")
+    nights, interval, budget = int(value("nights", 7)), int(value("interval_days", 2)), int(value("api_budget", MONITOR_DEFAULT_BUDGET))
+    if not 1 <= nights <= 60:
+        raise ValueError("Nights must be between 1 and 60.")
+    if interval not in MONITOR_INTERVALS:
+        raise ValueError("Choose a 1, 2, 3, or 7 day interval.")
+    if not 2 <= budget <= MONITOR_MAX_BUDGET:
+        raise ValueError(f"Per-run budget must be between 2 and {MONITOR_MAX_BUDGET} calls.")
+    timezone_name = str(value("timezone", "Asia/Kolkata"))
+    try:
+        ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as error:
+        raise ValueError("Choose a valid IANA timezone.") from error
+    codes = {}
+    for key in ("leg1_origin", "leg1_destination", "leg2_origin", "leg2_destination"):
+        code = str(value(key)).strip().upper()
+        if not code or len(code) > 100 or any(ord(c) < 32 for c in code):
+            raise ValueError("Each leg needs a valid airport code or supported airport group.")
+        codes[key] = code
+    enabled = str(value("enabled", "0")).lower() in {"1", "true", "on", "yes"}
+    config = {"name": name, "enabled": int(enabled), "start_date": start.isoformat(), "end_date": end.isoformat(),
+              "nights": nights, "interval_days": interval, "timezone": timezone_name, "api_budget": budget,
+              "notify_telegram": int(str(value("notify_telegram", "0")).lower() in {"1", "true", "on", "yes"}), **codes}
+    config["next_run_at"] = _next_run(interval, timezone_name) if enabled else None
+    return config
+
+
+def _execute_monitor(job):
+    if not os.getenv("SERPAPI_API_KEY"):
+        finish_monitor_run(job, "failed", error="SERPAPI_API_KEY is not configured.")
+        return None
+    cursor = int(job.get("rotation_cursor", 0))
+    try:
+        provider = SerpApiProvider()
+        report = search_multi_leg_itineraries(start_date=job["start_date"], end_date=job["end_date"],
+            international_provider=provider, serpapi_budget=int(job["api_budget"]), leg1_origin=job["leg1_origin"],
+            leg1_destination=job["leg1_destination"], leg2_origin=job["leg2_origin"], leg2_destination=job["leg2_destination"],
+            nights_between_departures=int(job["nights"]), combined_candidate_limit=2, rotation_cursor=cursor)
+        status = "succeeded" if report.get("itineraries") else ("partially_succeeded" if report.get("serpapi_calls") else "failed")
+        error = report.get("incomplete_reason") or ("No priced itinerary was returned." if not report.get("itineraries") else None)
+        finish_monitor_run(job, status, report, error, _next_run(int(job["interval_days"]), job["timezone"]) if job["enabled"] else None)
+        if job.get("notify_telegram"):
+            try:
+                sent = _send_monitor_notification(job, report, status)
+                mark_monitor_notification(job["run_id"], sent=sent,
+                    error=None if sent else "Telegram bot token or chat ID is not configured.")
+            except Exception as notification_error:
+                mark_monitor_notification(job["run_id"], sent=False, error=f"Telegram delivery failed: {notification_error}")
+        return {"status": status, "report": report, "error": error}
+    except Exception as error:
+        finish_monitor_run(job, "failed", error=str(error), next_run_at=_next_run(int(job["interval_days"]), job["timezone"]) if job["enabled"] else None)
+        return {"status": "failed", "error": str(error)}
+
+
+def _send_monitor_notification(job, report, status):
+    token, chat_id = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
+    if not token or not chat_id:
+        return False
+    import requests
+    best = min(report.get("itineraries", []), key=lambda item: item.get("total_price_inr", float("inf")), default=None)
+    plan = report.get("planned_usage", {})
+    combined = report.get("combined_results", [])
+    verified = sum(result.get("status") == "priced" for result in combined)
+    combined_status = f"{verified}/{len(combined)} combined checks priced" if combined else "no combined checks completed"
+    message = (f"Fare check: {job['name']} · {job['leg1_origin']}–{job['leg1_destination']} / "
+               f"{job['leg2_origin']}–{job['leg2_destination']}\nStatus: {status}\n"
+               f"Window: {job['start_date']} to {job['end_date']} · completed {datetime.now(ZoneInfo(job['timezone'])).isoformat(timespec='minutes')}\n"
+               f"Best observed: INR {best['total_price_inr']:,.0f}" if best else
+               f"Fare check: {job['name']}\nStatus: {status} · no newly priced itinerary\nWindow: {job['start_date']} to {job['end_date']} · completed {datetime.now(ZoneInfo(job['timezone'])).isoformat(timespec='minutes')}")
+    message += (f"\nCoverage: {report.get('covered_date_pairs', 0)}/{report.get('valid_date_pairs', 0)} date pairs; "
+                f"{combined_status}\nSerpApi calls: {report.get('serpapi_calls', 0)}/{job['api_budget']}")
+    if report.get("incomplete_reason"):
+        message += f"\nLimit: {report['incomplete_reason']}"
+    message += "\nObserved fares may change before booking."
+    response = requests.post(f"https://api.telegram.org/bot{token}/sendMessage", json={"chat_id": chat_id, "text": message}, timeout=10)
+    response.raise_for_status()
+    return True
+
+
+@app.get("/monitor/login")
+def monitor_login():
+    return render_template("monitor_login.html", error=None)
+
+
+@app.post("/monitor/login")
+def monitor_login_post():
+    expected = os.getenv("MONITOR_OWNER_PASSWORD", "")
+    if not expected or not app.secret_key:
+        return render_template("monitor_login.html", error="Set MONITOR_OWNER_PASSWORD and FLASK_SECRET_KEY to enable monitoring."), 503
+    if not hmac.compare_digest(request.form.get("password", ""), expected):
+        return render_template("monitor_login.html", error="Password was not accepted."), 401
+    session["monitor_owner"] = True
+    return redirect(url_for("monitor_dashboard"))
+
+
+@app.post("/monitor/logout")
+def monitor_logout():
+    session.clear()
+    return redirect(url_for("index"))
+
+
+@app.get("/monitor")
+@monitor_auth_required
+def monitor_dashboard():
+    initialize_database()
+    jobs = list_monitor_jobs()
+    runs = {str(job["id"]): list_monitor_runs(job["id"]) for job in jobs}
+    for job_runs in runs.values():
+        for run in job_runs:
+            try:
+                run["result"] = json.loads(run["result_json"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                run["result"] = {}
+    return render_template("monitor.html", jobs=jobs, runs=runs,
+                           max_budget=MONITOR_MAX_BUDGET, default_budget=MONITOR_DEFAULT_BUDGET,
+                           scheduler_ready=bool(os.getenv("FLIGHT_DATABASE_PATH") and os.getenv("MONITOR_OWNER_PASSWORD") and os.getenv("FLASK_SECRET_KEY")))
+
+
+@app.post("/api/monitor/jobs")
+@monitor_auth_required
+def monitor_create():
+    try:
+        config = _monitor_config(request.form)
+        return redirect(url_for("monitor_dashboard", saved=save_monitor_job(config)["id"]))
+    except (ValueError, TypeError) as error:
+        return jsonify(error=str(error)), 400
+
+
+@app.post("/api/monitor/jobs/<int:job_id>")
+@monitor_auth_required
+def monitor_update(job_id):
+    current = get_monitor_job(job_id)
+    if not current:
+        abort(404)
+    try:
+        config = _monitor_config(request.form, current)
+        save_monitor_job(config, job_id)
+        return redirect(url_for("monitor_dashboard", saved=job_id))
+    except (ValueError, TypeError) as error:
+        return jsonify(error=str(error)), 400
+
+
+@app.post("/api/monitor/jobs/<int:job_id>/run")
+@monitor_auth_required
+def monitor_run(job_id):
+    job = claim_monitor_run(job_id)
+    if not job:
+        return jsonify(error="Job is missing or already running."), 409
+    outcome = _execute_monitor(job)
+    return jsonify(outcome or {"status": "failed"}), 200 if outcome and outcome["status"] != "failed" else 502
+
+
+@app.post("/api/monitor/jobs/<int:job_id>/delete")
+@monitor_auth_required
+def monitor_delete(job_id):
+    delete_monitor_job(job_id)
+    return redirect(url_for("monitor_dashboard"))
+
+
+@app.cli.command("run-due-monitors")
+def run_due_monitors():
+    """Run due jobs once; invoke from a persistent scheduled worker."""
+    for job in list_monitor_jobs():
+        claimed = claim_monitor_run(job["id"], due_only=True)
+        if claimed:
+            outcome = _execute_monitor(claimed)
+            print(f"monitor {job['id']}: {(outcome or {}).get('status', 'failed')}")
 
 
 def _default_form_data():

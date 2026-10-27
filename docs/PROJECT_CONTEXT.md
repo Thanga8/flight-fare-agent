@@ -623,3 +623,7 @@ Cloud-based alerts
 while minimizing API cost.
 
 The project should remain simple enough for one person to maintain.
+
+## Fare monitoring
+
+See [FARE_MONITORING.md](FARE_MONITORING.md) for the owner-only scheduled monitoring feature, durable storage requirements, and deployment checklist. Production scheduling remains disabled until durable storage and owner credentials are configured.

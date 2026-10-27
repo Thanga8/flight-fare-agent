@@ -1,7 +1,8 @@
 import sqlite3
+import os
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -10,8 +11,8 @@ from typing import Optional, Dict, Any
 # DATABASE CONFIGURATION
 # ==========================================
 
-DATABASE_DIR = Path("data")
-DATABASE_PATH = DATABASE_DIR / "flights.db"
+DATABASE_PATH = Path(os.getenv("FLIGHT_DATABASE_PATH", "data/flights.db"))
+DATABASE_DIR = DATABASE_PATH.parent
 
 
 # ==========================================
@@ -25,9 +26,10 @@ def get_connection():
 
     DATABASE_DIR.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(DATABASE_PATH)
+    connection = sqlite3.connect(DATABASE_PATH, timeout=30)
 
     connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
 
     return connection
 
@@ -154,6 +156,23 @@ def initialize_database():
 
     # Isolated storage for the two-leg experimental search model.
     cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS fare_monitor_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0,
+            start_date TEXT NOT NULL, end_date TEXT NOT NULL, nights INTEGER NOT NULL,
+            leg1_origin TEXT NOT NULL, leg1_destination TEXT NOT NULL, leg2_origin TEXT NOT NULL, leg2_destination TEXT NOT NULL,
+            interval_days INTEGER NOT NULL DEFAULT 2, timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
+            api_budget INTEGER NOT NULL DEFAULT 6, notify_telegram INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL, next_run_at TEXT, last_run_at TEXT, rotation_cursor INTEGER NOT NULL DEFAULT 0,
+            running INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS fare_monitor_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL REFERENCES fare_monitor_jobs(id) ON DELETE CASCADE,
+            status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, serpapi_calls INTEGER NOT NULL DEFAULT 0,
+            serpapi_budget INTEGER NOT NULL, coverage_json TEXT NOT NULL DEFAULT '{}', result_json TEXT NOT NULL DEFAULT '{}',
+            error TEXT, notification_sent INTEGER NOT NULL DEFAULT 0, notification_error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_fare_monitor_due ON fare_monitor_jobs(enabled,next_run_at);
+        CREATE INDEX IF NOT EXISTS idx_fare_monitor_runs_job ON fare_monitor_runs(job_id,id DESC);
         CREATE TABLE IF NOT EXISTS multi_leg_search_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             searched_at TEXT NOT NULL,
@@ -235,7 +254,132 @@ def initialize_database():
 
     connection.commit()
 
+    # Additive upgrade for databases created by an earlier monitoring preview.
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(fare_monitor_runs)")}
+    if "notification_error" not in columns:
+        connection.execute("ALTER TABLE fare_monitor_runs ADD COLUMN notification_error TEXT")
+        connection.commit()
+
     connection.close()
+
+
+def save_monitor_job(config, job_id=None):
+    initialize_database()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    connection = get_connection()
+    fields = (config["name"], config["enabled"], config["start_date"], config["end_date"], config["nights"],
+              config["leg1_origin"], config["leg1_destination"], config["leg2_origin"], config["leg2_destination"],
+              config["interval_days"], config["timezone"], config["api_budget"], config["notify_telegram"])
+    try:
+        with connection:
+            if job_id:
+                cur = connection.execute("""UPDATE fare_monitor_jobs SET name=?,enabled=?,start_date=?,end_date=?,nights=?,
+                    leg1_origin=?,leg1_destination=?,leg2_origin=?,leg2_destination=?,interval_days=?,timezone=?,api_budget=?,notify_telegram=?,next_run_at=? WHERE id=?""",
+                    (*fields, config.get("next_run_at"), job_id))
+                if not cur.rowcount:
+                    return None
+            else:
+                job_id = connection.execute("""INSERT INTO fare_monitor_jobs
+                    (name,enabled,start_date,end_date,nights,leg1_origin,leg1_destination,leg2_origin,leg2_destination,
+                     interval_days,timezone,api_budget,notify_telegram,created_at,next_run_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (*fields, now, config.get("next_run_at"))).lastrowid
+        return get_monitor_job(job_id)
+    finally:
+        connection.close()
+
+
+def get_monitor_job(job_id):
+    initialize_database()
+    connection = get_connection()
+    try:
+        row = connection.execute("SELECT * FROM fare_monitor_jobs WHERE id=?", (job_id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        connection.close()
+
+
+def list_monitor_jobs():
+    initialize_database()
+    connection = get_connection()
+    try:
+        return [dict(row) for row in connection.execute("SELECT * FROM fare_monitor_jobs ORDER BY id DESC")]
+    finally:
+        connection.close()
+
+
+def delete_monitor_job(job_id):
+    initialize_database()
+    connection = get_connection()
+    try:
+        with connection:
+            connection.execute("DELETE FROM fare_monitor_jobs WHERE id=?", (job_id,))
+    finally:
+        connection.close()
+
+
+def claim_monitor_run(job_id, due_only=False):
+    """Atomically claim a manual or due run so two workers cannot overlap."""
+    initialize_database()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    connection = get_connection()
+    try:
+        with connection:
+            stale = connection.execute("""SELECT r.id FROM fare_monitor_runs r JOIN fare_monitor_jobs j ON j.id=r.job_id
+                WHERE j.id=? AND j.running=1 AND r.status='running' AND r.started_at < ? ORDER BY r.id DESC LIMIT 1""",
+                (job_id, (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(timespec="seconds"))).fetchone()
+            if stale:
+                connection.execute("UPDATE fare_monitor_runs SET status='failed',finished_at=?,error='Execution lease expired; previous worker did not finish.' WHERE id=?",
+                                   (now, stale["id"]))
+                connection.execute("UPDATE fare_monitor_jobs SET running=0 WHERE id=?", (job_id,))
+            clause = "id=? AND enabled=1 AND running=0 AND (next_run_at IS NULL OR next_run_at<=?)" if due_only else "id=? AND running=0"
+            params = (job_id, now) if due_only else (job_id,)
+            row = connection.execute(f"SELECT * FROM fare_monitor_jobs WHERE {clause}", params).fetchone()
+            if not row:
+                return None
+            cursor = connection.execute("UPDATE fare_monitor_jobs SET running=1 WHERE id=? AND running=0", (job_id,))
+            if cursor.rowcount != 1:
+                return None
+            run_id = connection.execute("INSERT INTO fare_monitor_runs(job_id,status,started_at,serpapi_budget) VALUES(?,?,?,?)",
+                                        (job_id, "running", now, row["api_budget"])).lastrowid
+            return dict(row) | {"run_id": run_id}
+    finally:
+        connection.close()
+
+
+def finish_monitor_run(job, status, report=None, error=None, next_run_at=None):
+    initialize_database()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    report = report or {}
+    coverage = {key: report.get(key) for key in ("valid_date_pairs", "covered_date_pairs", "combined_searches", "planned_usage", "serpapi_budget")}
+    connection = get_connection()
+    try:
+        with connection:
+            connection.execute("UPDATE fare_monitor_runs SET status=?,finished_at=?,serpapi_calls=?,coverage_json=?,result_json=?,error=? WHERE id=?",
+                (status, now, report.get("serpapi_calls", 0), json.dumps(coverage), json.dumps(report, default=str), error, job["run_id"]))
+            connection.execute("UPDATE fare_monitor_jobs SET running=0,last_run_at=?,next_run_at=?,rotation_cursor=rotation_cursor+1 WHERE id=?",
+                               (now, next_run_at, job["id"]))
+    finally:
+        connection.close()
+
+
+def list_monitor_runs(job_id, limit=30):
+    initialize_database()
+    connection = get_connection()
+    try:
+        return [dict(row) for row in connection.execute("SELECT * FROM fare_monitor_runs WHERE job_id=? ORDER BY id DESC LIMIT ?", (job_id, limit))]
+    finally:
+        connection.close()
+
+
+def mark_monitor_notification(run_id, *, sent, error=None):
+    initialize_database()
+    connection = get_connection()
+    try:
+        with connection:
+            connection.execute("UPDATE fare_monitor_runs SET notification_sent=?,notification_error=? WHERE id=?",
+                               (int(sent), error, run_id))
+    finally:
+        connection.close()
 
 
 def persist_multi_leg_search(*, run: Dict[str, Any], fares: list[Dict[str, Any]],

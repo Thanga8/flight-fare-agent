@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Fare Path · Owner login{% endblock %}
+{% block content %}
+<section class="hero"><p class="eyebrow">PRIVATE MONITORING</p><h1>Owner<br><em>sign in.</em></h1><p class="hero-copy">Sign in to configure paid scheduled searches and inspect monitoring history.</p></section>
+<section class="search-panel"><h2>Monitoring access</h2>{% if error %}<p class="error" role="alert">{{ error }}</p>{% endif %}<form method="post"><label class="monitor-label">Owner password<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">Sign in <span>→</span></button></form></section>
+{% endblock %}
