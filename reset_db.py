@@ -1,9 +1,13 @@
 import sqlite3
-from pathlib import Path
 
-DB_PATH = Path("data") / "flights.db"
+from flight_search.database.db import DATABASE_PATH, DATABASE_URL
+
+DB_PATH = DATABASE_PATH
 
 def reset_database():
+    if DATABASE_URL:
+        print("This legacy reset utility is SQLite-only; it refuses to modify PostgreSQL.")
+        return
     if not DB_PATH.exists():
         print(f"Database not found: {DB_PATH}")
         return

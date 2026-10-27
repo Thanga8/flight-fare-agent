@@ -1,8 +1,10 @@
 import sqlite3
 import os
+from dotenv import load_dotenv
 import math
 import hashlib
 import json
+import re
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -13,8 +15,58 @@ from typing import Optional, Dict, Any
 # DATABASE CONFIGURATION
 # ==========================================
 
+load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 DATABASE_PATH = Path(os.getenv("FLIGHT_DATABASE_PATH", "data/flights.db"))
 DATABASE_DIR = DATABASE_PATH.parent
+
+
+class _PostgresConnection:
+    """Small DB-API compatibility adapter for the application's SQLite SQL."""
+    def __init__(self, raw):
+        self.raw = raw
+
+    def execute(self, sql, params=()):
+        cursor = self.raw.cursor()
+        cursor.execute(_postgres_sql(sql), params)
+        return cursor
+
+    def cursor(self):
+        return _PostgresCursor(self.raw.cursor())
+
+    def executescript(self, sql):
+        for statement in sql.split(";"):
+            if statement.strip():
+                self.execute(statement)
+
+    def commit(self): self.raw.commit()
+    def rollback(self): self.raw.rollback()
+    def close(self): self.raw.close()
+    def __enter__(self):
+        self.raw.__enter__()
+        return self
+    def __exit__(self, *args): return self.raw.__exit__(*args)
+
+
+class _PostgresCursor:
+    def __init__(self, raw): self.raw = raw
+    def execute(self, sql, params=()): self.raw.execute(_postgres_sql(sql), params); return self
+    def fetchone(self): return self.raw.fetchone()
+    def fetchall(self): return self.raw.fetchall()
+    @property
+    def rowcount(self): return self.raw.rowcount
+    @property
+    def lastrowid(self): return None
+
+
+def _postgres_sql(sql):
+    sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
+    sql = re.sub(r"\b((?:search_run|job|run)_id) INTEGER\b", r"\1 BIGINT", sql)
+    ignore_conflict = "INSERT OR IGNORE INTO" in sql.upper()
+    sql = sql.replace("INSERT OR IGNORE INTO", "INSERT INTO")
+    if ignore_conflict and "ON CONFLICT" not in sql.upper():
+        sql = sql.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+    return sql.replace("?", "%s")
 
 
 # ==========================================
@@ -22,9 +74,17 @@ DATABASE_DIR = DATABASE_PATH.parent
 # ==========================================
 
 def get_connection():
-    """
-    Create and return a SQLite database connection.
-    """
+    """Open the configured PostgreSQL or SQLite connection."""
+
+    if DATABASE_URL:
+        import psycopg2
+        from psycopg2.extras import DictCursor
+        try:
+            raw = psycopg2.connect(DATABASE_URL, connect_timeout=10, cursor_factory=DictCursor,
+                                   application_name="flight-fare-agent")
+        except Exception:
+            raise RuntimeError("PostgreSQL connection failed; check local configuration and network access.") from None
+        return _PostgresConnection(raw)
 
     DATABASE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -47,6 +107,10 @@ def initialize_database():
     """
 
     connection = get_connection()
+
+    if DATABASE_URL:
+        # Serialize first-start schema creation/upgrades across web and Actions.
+        connection.execute("SELECT pg_advisory_xact_lock(731204991)")
 
     cursor = connection.cursor()
 
@@ -157,7 +221,7 @@ def initialize_database():
     )
 
     # Isolated storage for the two-leg experimental search model.
-    cursor.executescript("""
+    connection.executescript("""
         CREATE TABLE IF NOT EXISTS fare_monitor_jobs (
             id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 0,
             start_date TEXT NOT NULL, end_date TEXT NOT NULL, nights INTEGER NOT NULL,
@@ -264,17 +328,24 @@ def initialize_database():
         ON multi_leg_google_insights(departure_date, departure_id, arrival_id, source_fetched_at);
     """)
 
-    connection.commit()
-
     # Additive upgrade for databases created by an earlier monitoring preview.
-    columns = {row[1] for row in connection.execute("PRAGMA table_info(fare_monitor_runs)")}
+    if DATABASE_URL:
+        columns = {row["column_name"] for row in connection.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name=?", ("fare_monitor_runs",))}
+    else:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(fare_monitor_runs)")}
     if "notification_error" not in columns:
         connection.execute("ALTER TABLE fare_monitor_runs ADD COLUMN notification_error TEXT")
-        connection.commit()
-    observation_columns = {row[1] for row in connection.execute("PRAGMA table_info(fare_monitor_observations)")}
+    if DATABASE_URL:
+        observation_columns = {row["column_name"] for row in connection.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name=?", ("fare_monitor_observations",))}
+    else:
+        observation_columns = {row[1] for row in connection.execute("PRAGMA table_info(fare_monitor_observations)")}
     if "itinerary_label" not in observation_columns:
         connection.execute("ALTER TABLE fare_monitor_observations ADD COLUMN itinerary_label TEXT NOT NULL DEFAULT ''")
-        connection.commit()
+
+    # Keep the PostgreSQL advisory transaction lock through additive upgrades.
+    connection.commit()
 
     connection.close()
 
@@ -298,7 +369,7 @@ def save_monitor_job(config, job_id=None):
                 job_id = connection.execute("""INSERT INTO fare_monitor_jobs
                     (name,enabled,start_date,end_date,nights,leg1_origin,leg1_destination,leg2_origin,leg2_destination,
                      interval_days,timezone,api_budget,notify_telegram,created_at,next_run_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (*fields, now, config.get("next_run_at"))).lastrowid
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""", (*fields, now, config.get("next_run_at"))).fetchone()[0]
         return get_monitor_job(job_id)
     finally:
         connection.close()
@@ -339,7 +410,8 @@ def claim_monitor_run(job_id, due_only=False):
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     connection = get_connection()
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        if not DATABASE_URL:
+            connection.execute("BEGIN IMMEDIATE")
         with connection:
             stale = connection.execute("""SELECT r.id,j.interval_days,j.timezone FROM fare_monitor_runs r JOIN fare_monitor_jobs j ON j.id=r.job_id
                 WHERE j.id=? AND j.running=1 AND r.status='running' AND r.started_at < ? ORDER BY r.id DESC LIMIT 1""",
@@ -365,14 +437,15 @@ def claim_monitor_run(job_id, due_only=False):
                 return None
             clause = "id=? AND enabled=1 AND running=0 AND (next_run_at IS NULL OR next_run_at<=?)" if due_only else "id=? AND running=0"
             params = (job_id, now) if due_only else (job_id,)
-            row = connection.execute(f"SELECT * FROM fare_monitor_jobs WHERE {clause}", params).fetchone()
+            lock = " FOR UPDATE" if DATABASE_URL else ""
+            row = connection.execute(f"SELECT * FROM fare_monitor_jobs WHERE {clause}{lock}", params).fetchone()
             if not row:
                 return None
             cursor = connection.execute("UPDATE fare_monitor_jobs SET running=1 WHERE id=? AND running=0", (job_id,))
             if cursor.rowcount != 1:
                 return None
-            run_id = connection.execute("INSERT INTO fare_monitor_runs(job_id,status,started_at,serpapi_budget) VALUES(?,?,?,?)",
-                                        (job_id, "running", now, row["api_budget"])).lastrowid
+            run_id = connection.execute("INSERT INTO fare_monitor_runs(job_id,status,started_at,serpapi_budget) VALUES(?,?,?,?) RETURNING id",
+                                        (job_id, "running", now, row["api_budget"])).fetchone()[0]
             return dict(row) | {"run_id": run_id}
     finally:
         connection.close()
@@ -472,8 +545,22 @@ def check_database_readiness():
     """Check access to the configured DB without leaving any writes behind."""
     connection = get_connection()
     try:
-        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("SELECT 1")
         connection.rollback()
+    finally:
+        connection.close()
+
+
+def list_database_tables():
+    """Return public/application table names for the local diagnostic utility."""
+    connection = get_connection()
+    try:
+        if DATABASE_URL:
+            rows = connection.execute("""SELECT table_name FROM information_schema.tables
+                WHERE table_schema='public' AND table_type='BASE TABLE' ORDER BY table_name""").fetchall()
+            return [row[0] for row in rows]
+        return [row[0] for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()]
     finally:
         connection.close()
 
@@ -493,14 +580,14 @@ def persist_multi_leg_search(*, run: Dict[str, Any], fares: list[Dict[str, Any]]
                     leg1_origin,leg1_destination,leg2_origin,leg2_destination,
                     leg1_cache_mode,leg2_cache_mode,combined_cache_mode,
                     serpapi_budget,serpapi_calls,budget_limited,statistics_json
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id""",
                 (recorded_at, run["start_date"], run["end_date"], run["nights"],
                  run["leg1_origin"], run["leg1_destination"], run["leg2_origin"], run["leg2_destination"],
                  run["leg1_cache_mode"], run["leg2_cache_mode"], run["combined_cache_mode"],
                  run["serpapi_budget"], run["serpapi_calls"], int(run["budget_limited"]),
                  json.dumps(run["statistics"], ensure_ascii=False, sort_keys=True)),
             )
-            run_id = cursor.lastrowid
+            run_id = cursor.fetchone()[0]
             for fare in fares:
                 source_time = fare.get("source_fetched_at") or recorded_at
                 identity = {key: fare.get(key) for key in (
@@ -649,7 +736,7 @@ def create_search_run(
             VALUES (
                 CURRENT_TIMESTAMP,
                 ?, ?, ?, ?, ?, ?, ?
-            )
+            ) RETURNING id
             """,
             (
                 origin,
@@ -662,9 +749,10 @@ def create_search_run(
             ),
         )
 
+        run_id = cursor.fetchone()[0]
         connection.commit()
 
-        return cursor.lastrowid
+        return run_id
 
     finally:
         connection.close()
@@ -709,7 +797,7 @@ def save_flight_result(
                 convenience_score,
                 final_score
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id
             """,
             (
                 search_run_id,
@@ -730,9 +818,10 @@ def save_flight_result(
             ),
         )
 
+        result_id = cursor.fetchone()[0]
         connection.commit()
 
-        return cursor.lastrowid
+        return result_id
 
     finally:
         connection.close()

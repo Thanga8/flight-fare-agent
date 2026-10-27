@@ -1,17 +1,28 @@
 import unittest
 import importlib
 import os
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
 import webapp as webapp_module
 from webapp import _booking_links, app
 from flight_search.config import settings
+from flight_search.database import db
 
 
 class WebAppTests(unittest.TestCase):
     def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.old_db_url, self.old_db_path, self.old_db_dir = db.DATABASE_URL, db.DATABASE_PATH, db.DATABASE_DIR
+        db.DATABASE_URL = ""
+        db.DATABASE_PATH = Path(self.temp.name) / "webapp.db"
+        db.DATABASE_DIR = Path(self.temp.name)
         self.client = app.test_client()
+
+    def tearDown(self):
+        db.DATABASE_URL, db.DATABASE_PATH, db.DATABASE_DIR = self.old_db_url, self.old_db_path, self.old_db_dir
+        self.temp.cleanup()
 
     def test_landing_page_loads_without_searching(self):
         response = self.client.get("/")
@@ -22,6 +33,22 @@ class WebAppTests(unittest.TestCase):
         self.assertIn(b"API Usage Preview", response.data)
         self.assertIn(b"api_usage_preview.js", response.data)
         self.assertIn(b'name="serpapi_budget" value="50" min="0" max="50"', response.data)
+
+    def test_health_endpoint_checks_connectivity_without_initializing_schema(self):
+        with patch("flight_search.database.db.check_database_readiness") as check, \
+             patch.object(webapp_module, "initialize_database") as initialize:
+            response = self.client.get("/healthz")
+        self.assertEqual(200, response.status_code)
+        self.assertEqual({"status": "ready", "database": "reachable"}, response.json)
+        check.assert_called_once_with()
+        initialize.assert_not_called()
+
+    def test_health_endpoint_hides_database_exception_details(self):
+        with patch("flight_search.database.db.check_database_readiness",
+                   side_effect=RuntimeError("postgresql://user:secret@example/db")):
+            response = self.client.get("/healthz")
+        self.assertEqual(503, response.status_code)
+        self.assertNotIn("secret", response.get_data(as_text=True))
 
     def test_budget_default_and_maximum_settings(self):
         self.assertEqual(50, settings.DEFAULT_MULTI_LEG_SERPAPI_BUDGET)

@@ -285,7 +285,7 @@ def _monitor_readiness():
     checks = {
         "owner_auth": (len(os.getenv("FLASK_SECRET_KEY", "")) >= 32 and len(os.getenv("MONITOR_OWNER_PASSWORD", "")) >= 12, "Set FLASK_SECRET_KEY (at least 32 characters) and MONITOR_OWNER_PASSWORD (at least 12 characters) on the web service."),
         "search_provider": (_serpapi_key_configured(), "Set SERPAPI_API_KEY on the web service and scheduler host. Presence is checked locally; provider acceptance requires a live request."),
-        "database_path": (bool(os.getenv("FLIGHT_DATABASE_PATH")), "Set FLIGHT_DATABASE_PATH to the same persistent database path for the web service and runner."),
+        "database_configuration": (True, "DATABASE_URL selects shared PostgreSQL when present; otherwise FLIGHT_DATABASE_PATH (default data/flights.db) selects local SQLite."),
         "request_budget": (MONITOR_BUDGET_CONFIG_ERROR is None and MONITOR_MAX_BUDGET >= 2, MONITOR_BUDGET_CONFIG_ERROR or "Set MONITOR_MAX_SERPAPI_BUDGET and MAX_WEB_SERPAPI_BUDGET to allow at least 2 calls."),
         "scheduler_gate": (os.getenv("FARE_MONITOR_ENABLED", "").lower() == "true", "Set repository variable FARE_MONITOR_ENABLED=true only after runner and shared storage are ready."),
         "telegram": (bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip()), "Telegram is optional; configure both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID if notifications are enabled."),
@@ -294,14 +294,25 @@ def _monitor_readiness():
         initialize_database()
         from flight_search.database.db import check_database_readiness
         check_database_readiness()
-        database = {"status": "ready", "message": "Database is reachable and writable."}
+        database = {"status": "ready", "message": "Database is reachable."}
     except Exception:
-        database = {"status": "missing", "message": "Database is unavailable or read-only; verify FLIGHT_DATABASE_PATH and filesystem access."}
+        database = {"status": "missing", "message": "Database is unavailable; verify the configured database connection and network access."}
     return {"monitoring_enabled": os.getenv("FARE_MONITOR_ENABLED", "").lower() == "true",
             "checks": {name: {"status": "ready" if ok else "missing", "message": note} for name, (ok, note) in checks.items()},
             "database": database,
             "scheduler": {"status": "configured" if os.getenv("GITHUB_ACTIONS") == "true" and os.getenv("RUNNER_NAME") else "not_verified",
-                          "message": "Runner environment detected; this does not verify workflow branch, shared mount, or a successful run." if os.getenv("GITHUB_ACTIONS") == "true" and os.getenv("RUNNER_NAME") else "A self-hosted runner and workflow on the repository default branch are required."}}
+                          "message": "GitHub-hosted runner environment detected; this does not verify the workflow schedule or a successful run." if os.getenv("GITHUB_ACTIONS") == "true" else "GitHub Actions must be deliberately configured; scheduled events use the workflow on the repository default branch."}}
+
+
+@app.get("/healthz")
+def healthz():
+    """Non-secret connectivity check for local startup and workflow preflight."""
+    try:
+        from flight_search.database.db import check_database_readiness
+        check_database_readiness()
+        return jsonify(status="ready", database="reachable"), 200
+    except Exception:
+        return jsonify(status="unavailable", database="unreachable"), 503
 
 
 @app.get("/api/monitor/readiness")
@@ -357,11 +368,25 @@ def run_due_monitors():
     if os.getenv("FARE_MONITOR_ENABLED", "").lower() != "true":
         print("Fare monitoring scheduler gate is disabled; no jobs were run.")
         return
+    initialize_database()
     for job in list_monitor_jobs():
         claimed = claim_monitor_run(job["id"], due_only=True)
         if claimed:
             outcome = _execute_monitor(claimed)
             print(f"monitor {job['id']}: {(outcome or {}).get('status', 'failed')}")
+
+
+@app.cli.command("db-ready")
+def db_ready():
+    """Initialize the schema and check connectivity without fare searches."""
+    try:
+        initialize_database()
+        from flight_search.database.db import check_database_readiness
+        check_database_readiness()
+    except Exception:
+        print("Database unavailable; check local configuration and network access.")
+        raise SystemExit(1)
+    print("Database ready.")
 
 
 def _default_form_data():
@@ -458,6 +483,7 @@ def search():
         )
 
     try:
+        initialize_database()
         provider = SerpApiProvider(allow_cache_only=not needs_live_api)
         report = search_multi_leg_itineraries(
             start_date=form_data["start_date"],

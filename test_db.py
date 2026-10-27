@@ -1,22 +1,7 @@
-import sqlite3
+"""Print configured database tables for a local diagnostic."""
 
-connection = sqlite3.connect("data/flights.db")
-
-cursor = connection.cursor()
-
-cursor.execute(
-    """
-    SELECT name
-    FROM sqlite_master
-    WHERE type = 'table'
-    """
-)
-
-tables = cursor.fetchall()
+from flight_search.database.db import list_database_tables
 
 print("Tables:")
-
-for table in tables:
-    print(f"- {table[0]}")
-
-connection.close()
+for table in list_database_tables():
+    print(f"- {table}")

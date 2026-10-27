@@ -1,4 +1,3 @@
-import sqlite3
 from datetime import date, datetime, timedelta
 
 from flight_search.database.db import get_connection
