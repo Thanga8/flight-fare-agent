@@ -17,8 +17,8 @@ Telegram is only sent for successful runs when there is a new itinerary or a mat
 | `MONITOR_OWNER_PASSWORD` | Required for monitoring login | Not required by CLI | Single-owner dashboard access; use at least 12 characters. |
 | `FLIGHT_DATABASE_PATH` | Same absolute path | Same absolute path | Persistent SQLite file shared by web process and runner. |
 | `FARE_MONITOR_ENABLED` | Displayed as scheduler gate | Required and must be `true` | Workflow gate; CLI fails closed unless enabled. Leave unset/false until deployment is ready. |
-| `MAX_WEB_SERPAPI_BUDGET` | Required for budget policy | Set to same ceiling | Existing overall server-side request ceiling. |
-| `MONITOR_MAX_SERPAPI_BUDGET` | Required for monitor ceiling | Set to same ceiling | Defaults to 12 and is capped by the overall ceiling. New jobs default to 6 calls. |
+| `MAX_WEB_SERPAPI_BUDGET` | Required for budget policy | Set to same ceiling | Set to 12 in both environments; this is a per-run maximum, not an account quota. |
+| `MONITOR_MAX_SERPAPI_BUDGET` | Required for monitor ceiling | Set to same ceiling | Set to 12 in both environments and capped by the overall ceiling. New jobs default to 6 calls. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Needed for manual-run notifications | Needed for scheduled-run notifications | Optional pair. Missing values produce an explicit delivery status; never shown in readiness output. |
 | `FARE_CHANGE_MIN_ABS_INR`, `FARE_CHANGE_MIN_PERCENT` | Optional | Optional | Thresholds must match on the web and runner when both can execute jobs; defaults are 1000 INR and 3%. |
 | `COOKIE_SECURE` | `true` behind HTTPS | Not required | Enables Secure session cookies; local HTTP development can use `false`. HttpOnly and SameSite=Lax are enabled. |
@@ -33,13 +33,31 @@ The monitor workflow is `.github/workflows/fare-monitor.yml`, runs every six hou
 
 The workflow gate requires repository variable `FARE_MONITOR_ENABLED=true`. If unset or false, no job runs. The runner must be registered on the host that owns the local database volume, labeled `linux` and `fare-monitor`, and configured to run under a user with database access. A runner on a separate host cannot safely use a runner-local SQLite file.
 
+The workflow intentionally checks out **`codex/multi-leg-itinerary-search`** regardless of which branch contains the workflow definition. That branch must contain the monitor CLI, database schema, and provider implementation. Any code intended for scheduled production execution must be merged/published to that exact branch first. Updating the workflow branch ref requires an explicit reviewed change; it is not automatically derived from the workflow's default-branch revision. The workflow is not installed on `main` by this PR, and this remediation does not publish it there.
+
+## Production web process
+
+There is no bundled deployment manifest. Use the production WSGI entry point `webapp:app`; do not use `python webapp.py` or Flask's development server in production. Install `requirements.txt`, then launch a single Gunicorn worker bound to loopback, for example:
+
+```sh
+gunicorn --bind 127.0.0.1:8000 --workers 1 --timeout 900 webapp:app
+```
+
+Place a TLS reverse proxy in front and run Gunicorn under a service manager such as systemd with the production environment injected by the service manager. Keep the DB on durable local disk outside the release checkout. A single worker is the supported initial setting for this SQLite app; the runner remains a separate process on the same host. Gunicorn's 900-second request limit is for web requests and is not the SerpApi request bound; provider calls are individually limited to 30 seconds.
+
+## Budget and retry policy
+
+The safe default is `MAX_WEB_SERPAPI_BUDGET=12` and `MONITOR_MAX_SERPAPI_BUDGET=12` in both the web service and workflow. The workflow sets both explicitly. New monitor jobs default to 6; each saved job is rejected before search if its per-run allowance exceeds either current ceiling. The provider wrapper also caps the actual live requests for that run. These are per-run limits, not a daily or account-wide quota; multiple due jobs can each consume their own allowance.
+
+The workflow serializes its own invocations and does not cancel an active run. Each SerpApi SDK request has a 30-second timeout. If a process nevertheless dies while a run is recorded as running, the next claim after the 30-minute lease marks it failed, clears `running`, and defers `next_run_at` by the job interval. That claim returns without starting another search. Both scheduled and manual claims respect this recovery cooldown. A later scheduler invocation can retry only after the deferred due time. A completed provider request whose response was lost during termination may still have been charged; no local code can make the provider call and SQLite completion atomic.
+
 ## GitHub configuration checklist
 
 In repository **Settings → Secrets and variables → Actions**:
 
 **Variables**
 
-- `FARE_MONITOR_ENABLED`: keep unset or set to `false` during setup; set to `true` only after the runner, persistent database path, and code on `main` are verified.
+- `FARE_MONITOR_ENABLED`: keep unset or set to `false` during setup; set to `true` only after the runner, persistent database path, and workflow's fixed checkout branch `codex/multi-leg-itinerary-search` are verified.
 - `FLIGHT_DATABASE_PATH`: absolute path on the self-hosted Linux host, such as `/srv/flight-fare-agent/data/flights.db` (example only, not a required path).
 
 **Secrets**
@@ -48,7 +66,7 @@ In repository **Settings → Secrets and variables → Actions**:
 - `TELEGRAM_BOT_TOKEN` (optional unless Telegram is enabled on a job)
 - `TELEGRAM_CHAT_ID` (optional unless Telegram is enabled on a job)
 
-Separately configure the **web service process environment** with `SERPAPI_API_KEY`, `FLIGHT_DATABASE_PATH`, `FLASK_SECRET_KEY`, `MONITOR_OWNER_PASSWORD`, and the Telegram pair if manual-run notifications are wanted. Also set `MAX_WEB_SERPAPI_BUDGET` and `MONITOR_MAX_SERPAPI_BUDGET` to matching ceilings in the web and runner environments. GitHub secrets do not automatically configure a separate web host. Set the fare thresholds in both environments if overriding defaults.
+Separately configure the **web service process environment** with `SERPAPI_API_KEY`, `FLIGHT_DATABASE_PATH`, `FLASK_SECRET_KEY`, `MONITOR_OWNER_PASSWORD`, and the Telegram pair if manual-run notifications are wanted. Set both `MAX_WEB_SERPAPI_BUDGET=12` and `MONITOR_MAX_SERPAPI_BUDGET=12` there; the workflow sets both to 12 as well. GitHub secrets do not automatically configure a separate web host. Set the fare thresholds in both environments if overriding defaults.
 
 ## Enable, test, pause, and roll back
 

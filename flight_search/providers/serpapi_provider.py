@@ -14,6 +14,7 @@ from flight_search.providers.base import FlightSearchProvider
 load_dotenv()
 
 CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
+SERPAPI_REQUEST_TIMEOUT_SECONDS = 30
 
 
 def _utc_now() -> datetime:
@@ -156,7 +157,8 @@ class SerpApiProvider(FlightSearchProvider):
         # ==========================================
 
         response = self.client.search(
-            params
+            params,
+            timeout=SERPAPI_REQUEST_TIMEOUT_SECONDS,
         )
 
         if self.save_raw_responses:
@@ -203,7 +205,7 @@ class SerpApiProvider(FlightSearchProvider):
             "hl": "en",
             "type": "2",
         }
-        response = dict(self.client.search(params))
+        response = dict(self.client.search(params, timeout=SERPAPI_REQUEST_TIMEOUT_SECONDS))
         response = _save_cached_response(cache_path, response)
         if self.save_raw_responses:
             self._save_raw_response(
@@ -236,7 +238,7 @@ class SerpApiProvider(FlightSearchProvider):
             return _read_fresh_cache(cache_path, "this multi-city query")
         if self.client is None:
             raise ValueError("SERPAPI_API_KEY is required for live searches.")
-        response = dict(self.client.search(params))
+        response = dict(self.client.search(params, timeout=SERPAPI_REQUEST_TIMEOUT_SECONDS))
         return _save_cached_response(cache_path, response)
 
     @staticmethod

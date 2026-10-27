@@ -43,7 +43,7 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "")
 app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
                   SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "false").strip().lower() in {"1", "true", "yes", "on"})
 try:
-    MONITOR_MAX_BUDGET = min(MAX_WEB_SERPAPI_BUDGET, max(0, int(os.getenv("MONITOR_MAX_SERPAPI_BUDGET", "12"))))
+    MONITOR_MAX_BUDGET = min(MAX_WEB_SERPAPI_BUDGET, max(0, int(os.getenv("MONITOR_MAX_SERPAPI_BUDGET", str(MAX_WEB_SERPAPI_BUDGET)))))
     MONITOR_BUDGET_CONFIG_ERROR = None
 except (TypeError, ValueError):
     MONITOR_MAX_BUDGET = 0
@@ -699,4 +699,5 @@ def fare_history():
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    # Development convenience only. Production must use a WSGI server.
+    app.run(host="127.0.0.1", port=5000, debug=False)

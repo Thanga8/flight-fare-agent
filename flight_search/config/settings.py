@@ -24,7 +24,7 @@ MAX_SEARCHES = 4
 
 load_dotenv()
 
-DEFAULT_MULTI_LEG_SERPAPI_BUDGET = 50
+DEFAULT_MULTI_LEG_SERPAPI_BUDGET = 12
 
 
 def _read_max_web_serpapi_budget(value=None):
@@ -32,7 +32,7 @@ def _read_max_web_serpapi_budget(value=None):
     if value is None:
         value = os.getenv("MAX_WEB_SERPAPI_BUDGET")
     if value is None:
-        return 250
+        return 12
     try:
         maximum = int(value)
     except (TypeError, ValueError) as error:

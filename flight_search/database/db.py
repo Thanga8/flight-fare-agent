@@ -345,11 +345,24 @@ def claim_monitor_run(job_id, due_only=False):
                 WHERE j.id=? AND j.running=1 AND r.status='running' AND r.started_at < ? ORDER BY r.id DESC LIMIT 1""",
                 (job_id, (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(timespec="seconds"))).fetchone()
             if stale:
+                # A dead/timed-out worker may already have spent the provider
+                # budget. Do not reclaim in this scheduler invocation; defer
+                # the retry by a full interval and require the next poll.
                 next_after_recovery = (datetime.now(ZoneInfo(stale["timezone"])) + timedelta(days=int(stale["interval_days"]))).astimezone(timezone.utc).isoformat(timespec="seconds")
                 connection.execute("UPDATE fare_monitor_runs SET status='failed',finished_at=?,error='Execution lease expired; previous worker did not finish.' WHERE id=?",
                                    (now, stale["id"]))
                 connection.execute("UPDATE fare_monitor_jobs SET running=0,last_run_at=?,next_run_at=? WHERE id=?",
                                    (now, next_after_recovery, job_id))
+                return None
+            recovery_hold = connection.execute("""SELECT j.next_run_at FROM fare_monitor_jobs j
+                JOIN fare_monitor_runs r ON r.job_id=j.id
+                WHERE j.id=? AND r.status='failed'
+                  AND r.error='Execution lease expired; previous worker did not finish.'
+                ORDER BY r.id DESC LIMIT 1""", (job_id,)).fetchone()
+            if recovery_hold and recovery_hold["next_run_at"] and recovery_hold["next_run_at"] > now:
+                # Applies to manual and scheduled claims. A manual button must
+                # not bypass the post-timeout cooldown and duplicate uncertain spend.
+                return None
             clause = "id=? AND enabled=1 AND running=0 AND (next_run_at IS NULL OR next_run_at<=?)" if due_only else "id=? AND running=0"
             params = (job_id, now) if due_only else (job_id,)
             row = connection.execute(f"SELECT * FROM fare_monitor_jobs WHERE {clause}", params).fetchone()

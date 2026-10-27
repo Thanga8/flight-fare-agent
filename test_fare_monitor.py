@@ -198,6 +198,33 @@ class FareMonitorTests(unittest.TestCase):
         self.assertEqual(0, saved["running"])
         self.assertGreater(datetime.fromisoformat(saved["next_run_at"]), datetime.now(timezone.utc))
         self.assertEqual("failed", db.list_monitor_runs(job["id"])[0]["status"])
+        # Manual runs cannot bypass the recovery cooldown either.
+        self.assertIsNone(db.claim_monitor_run(job["id"], due_only=False))
+        # Once the deferred schedule is due, a later scheduler invocation may retry.
+        connection = db.get_connection()
+        with connection:
+            connection.execute("UPDATE fare_monitor_jobs SET next_run_at=? WHERE id=?", ("2000-01-01T00:00:00+00:00", job["id"]))
+        connection.close()
+        retry = db.claim_monitor_run(job["id"], due_only=True)
+        self.assertIsNotNone(retry)
+        self.assertEqual(1, db.get_monitor_job(job["id"])["running"])
+        self.assertEqual("running", db.list_monitor_runs(job["id"])[0]["status"])
+
+    def test_serpapi_provider_sets_a_bounded_request_timeout(self):
+        from unittest.mock import Mock
+        from flight_search.providers.serpapi_provider import (
+            SERPAPI_REQUEST_TIMEOUT_SECONDS, SerpApiProvider,
+        )
+        provider = SerpApiProvider(api_key="test-only", save_raw_responses=False)
+        provider.client = Mock()
+        provider.client.search.return_value = {}
+        with patch("flight_search.providers.serpapi_provider._save_cached_response", side_effect=lambda _path, value: value):
+            provider.search_round_trip("HYD", "SVO", "2027-01-20", "2027-01-25")
+            provider.search_one_way("HYD", "SVO", "2027-01-20")
+            provider.search_multi_city([{"departure_id": "HYD", "arrival_id": "SVO", "date": "2027-01-20"}])
+        self.assertEqual(3, provider.client.search.call_count)
+        self.assertTrue(all(call.kwargs["timeout"] == SERPAPI_REQUEST_TIMEOUT_SECONDS
+                            for call in provider.client.search.call_args_list))
 
     def test_telegram_suppresses_repeated_unchanged_fare_without_losing_run_history(self):
         from test_fare_change_detection import itinerary

@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Serialize scheduler invocations. Do not cancel an active run: cancellation
+# could leave an uncertain provider request and a running database lease.
+concurrency:
+  group: fare-monitor-scheduler
+  cancel-in-progress: false
+
 jobs:
   run-due-monitors:
     if: ${{ vars.FARE_MONITOR_ENABLED == 'true' }}
@@ -32,6 +38,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           MAX_WEB_SERPAPI_BUDGET: "12"
+          MONITOR_MAX_SERPAPI_BUDGET: "12"
         run: |
           if [ -z "$FLIGHT_DATABASE_PATH" ]; then echo "FLIGHT_DATABASE_PATH must identify mounted persistent storage"; exit 1; fi
           flask --app webapp run-due-monitors
