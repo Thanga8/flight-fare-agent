@@ -37,8 +37,8 @@ jobs:
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          MAX_WEB_SERPAPI_BUDGET: "12"
-          MONITOR_MAX_SERPAPI_BUDGET: "12"
+          MAX_WEB_SERPAPI_BUDGET: "50"
+          MONITOR_MAX_SERPAPI_BUDGET: "50"
         run: |
           if [ -z "$FLIGHT_DATABASE_PATH" ]; then echo "FLIGHT_DATABASE_PATH must identify mounted persistent storage"; exit 1; fi
           flask --app webapp run-due-monitors

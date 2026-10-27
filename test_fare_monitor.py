@@ -103,6 +103,15 @@ class FareMonitorTests(unittest.TestCase):
             response = self.post("/api/monitor/jobs", self.create_data(**updates))
             self.assertEqual(400, response.status_code)
 
+    def test_monitor_budget_maximum_is_50_but_new_job_default_stays_6(self):
+        self.login()
+        self.assertEqual(302, self.post("/api/monitor/jobs", self.create_data()).status_code)
+        self.assertEqual(6, db.list_monitor_jobs()[0]["api_budget"])
+        response = self.post("/api/monitor/jobs", self.create_data(api_budget="50"))
+        self.assertEqual(302, response.status_code)
+        rejected = self.post("/api/monitor/jobs", self.create_data(api_budget="51"))
+        self.assertEqual(400, rejected.status_code)
+
     def test_enabled_pause_reenable_and_unrelated_edits_are_explicit(self):
         self.login()
         self.post("/api/monitor/jobs", self.create_data(enabled="1"))
