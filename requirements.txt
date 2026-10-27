@@ -2,3 +2,5 @@ serpapi
 python-dotenv
 requests
 Flask
+gunicorn
+tzdata

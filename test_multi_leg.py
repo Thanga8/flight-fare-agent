@@ -65,7 +65,10 @@ class MultiLegTests(unittest.TestCase):
         self.assertTrue(r["budget_limited"])
 
     def test_sampling_edges_and_inclusive_dates(self):
-        self.assertEqual(["2027-01-01", "2027-01-05", "2027-01-10"], _sample_dates("2027-01-01", "2027-01-10", 3))
+        first = _sample_dates("2027-01-01", "2027-01-10", 3)
+        rotated = _sample_dates("2027-01-01", "2027-01-10", 3, 1)
+        self.assertEqual(["2027-01-01", "2027-01-10"], [first[0], first[-1]])
+        self.assertNotEqual(first, rotated)
         self.assertEqual([], _sample_dates("2027-01-01", "2027-01-01", 0))
         with self.assertRaises(ValueError): _sample_dates("2027-02-01", "2027-01-01", 2)
         with self.assertRaises(ValueError): _sample_dates("bad", "2027-01-01", 2)
@@ -153,9 +156,15 @@ class MultiLegTests(unittest.TestCase):
         cache_combined = plan_multi_leg_usage(*args, combined_cache_mode="cache", combined_candidate_limit=5)
         self.assertEqual(0, cache_combined["exhaustive_combined_live_requests_max"])
         live_combined = plan_multi_leg_usage(*args, combined_candidate_limit=5)
-        self.assertEqual(1, live_combined["combined_live_requests_max"])
+        self.assertEqual(5, live_combined["combined_live_requests_max"])
         self.assertEqual(5, live_combined["exhaustive_combined_live_requests_max"])
         self.assertLessEqual(live_combined["configured_total_live_requests_max"], 7)
+
+    def test_combined_reservation_keeps_one_pair_for_small_budgets(self):
+        plan = plan_multi_leg_usage("2027-01-01", "2027-01-10", 7, 3, combined_candidate_limit=2)
+        self.assertEqual(1, plan["covered_date_pairs"])
+        self.assertEqual(1, plan["combined_live_requests_max"])
+        self.assertEqual(3, plan["configured_total_live_requests_max"])
 
     def test_airport_group_remains_one_provider_request_per_leg(self):
         provider = Provider()
