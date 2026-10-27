@@ -12,6 +12,8 @@ from flight_search.database import db
 class FareMonitorTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.database_url_patch = patch.object(db, "DATABASE_URL", "")
+        self.database_url_patch.start()
         self.path_patch = patch.object(db, "DATABASE_PATH", os.path.join(self.temp.name, "monitor.db"))
         self.path_patch.start()
         self.dir_patch = patch.object(db, "DATABASE_DIR", __import__("pathlib").Path(self.temp.name))
@@ -25,6 +27,7 @@ class FareMonitorTests(unittest.TestCase):
 
     def tearDown(self):
         self.env.stop()
+        self.database_url_patch.stop()
         self.dir_patch.stop()
         self.path_patch.stop()
         self.temp.cleanup()
@@ -207,12 +210,18 @@ class FareMonitorTests(unittest.TestCase):
         self.assertEqual(0, saved["running"])
         self.assertGreater(datetime.fromisoformat(saved["next_run_at"]), datetime.now(timezone.utc))
         self.assertEqual("failed", db.list_monitor_runs(job["id"])[0]["status"])
+        recovered = db.list_monitor_runs(job["id"])[0]
+        self.assertEqual("upper_bound", recovered["accounting_status"])
+        self.assertEqual(job["api_budget"], recovered["serpapi_calls"])
+        self.assertIn("uncertain", recovered["error"])
         # Manual runs cannot bypass the recovery cooldown either.
         self.assertIsNone(db.claim_monitor_run(job["id"], due_only=False))
         # Once the deferred schedule is due, a later scheduler invocation may retry.
         connection = db.get_connection()
         with connection:
             connection.execute("UPDATE fare_monitor_jobs SET next_run_at=? WHERE id=?", ("2000-01-01T00:00:00+00:00", job["id"]))
+            connection.execute("UPDATE fare_monitor_runs SET recovery_hold_until=? WHERE id=?",
+                               ("2000-01-01T00:00:00+00:00", claim["run_id"]))
         connection.close()
         retry = db.claim_monitor_run(job["id"], due_only=True)
         self.assertIsNotNone(retry)

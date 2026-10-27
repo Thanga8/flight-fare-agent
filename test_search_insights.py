@@ -1,6 +1,9 @@
 import unittest
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 
+from flight_search.database import db
 from flight_search.multi_leg import search_multi_leg_itineraries
 from webapp import _plot_points, app
 
@@ -158,6 +161,12 @@ class SearchInsightReportTests(unittest.TestCase):
 
 class ResultsInsightRenderingTests(unittest.TestCase):
     def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.database_url_patch = patch.object(db, "DATABASE_URL", "")
+        self.database_url_patch.start()
+        self.old_path, self.old_dir = db.DATABASE_PATH, db.DATABASE_DIR
+        db.DATABASE_PATH = Path(self.temp.name) / "insights.db"
+        db.DATABASE_DIR = Path(self.temp.name)
         self.client = app.test_client()
         self.report = {
             "itineraries": [], "nights_between_departures": 7,
@@ -170,6 +179,11 @@ class ResultsInsightRenderingTests(unittest.TestCase):
             "leg2_cache_hits": 0, "combined_cache_mode": "cache",
             "combined_cache_hits": 0, "google_insights": [],
         }
+
+    def tearDown(self):
+        db.DATABASE_PATH, db.DATABASE_DIR = self.old_path, self.old_dir
+        self.database_url_patch.stop()
+        self.temp.cleanup()
 
     def render_insights(self, *insights):
         self.report["google_insights"] = list(insights)

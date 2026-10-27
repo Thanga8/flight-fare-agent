@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from flight_search.database import db
 from webapp import app
@@ -10,6 +11,8 @@ from webapp import app
 class FareHistoryViewTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
+        self.database_url_patch = patch.object(db, "DATABASE_URL", "")
+        self.database_url_patch.start()
         self.old_dir, self.old_path = db.DATABASE_DIR, db.DATABASE_PATH
         db.DATABASE_DIR = Path(self.temp.name)
         db.DATABASE_PATH = Path(self.temp.name) / "history.db"
@@ -18,6 +21,7 @@ class FareHistoryViewTests(unittest.TestCase):
 
     def tearDown(self):
         db.DATABASE_DIR, db.DATABASE_PATH = self.old_dir, self.old_path
+        self.database_url_patch.stop()
         self.temp.cleanup()
 
     @staticmethod

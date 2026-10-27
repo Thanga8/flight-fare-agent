@@ -86,7 +86,7 @@ class FareChangeDetectionTests(unittest.TestCase):
 
     def test_failed_run_does_not_replace_successful_history_baseline(self):
         temp = tempfile.TemporaryDirectory()
-        with patch.object(db, "DATABASE_PATH", Path(temp.name) / "fare.db"), patch.object(db, "DATABASE_DIR", Path(temp.name)):
+        with patch.object(db, "DATABASE_URL", ""), patch.object(db, "DATABASE_PATH", Path(temp.name) / "fare.db"), patch.object(db, "DATABASE_DIR", Path(temp.name)):
             db.initialize_database()
             job = db.save_monitor_job(JOB | {"name": "History", "enabled": 0, "interval_days": 2, "timezone": "Asia/Kolkata",
                 "api_budget": 6, "notify_telegram": 0, "next_run_at": None})

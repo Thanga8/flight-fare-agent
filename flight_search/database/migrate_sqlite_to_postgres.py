@@ -20,6 +20,12 @@ TABLES = (
     "multi_leg_fare_observations", "multi_leg_search_outcomes",
     "multi_leg_comparisons", "multi_leg_google_insights",
 )
+OPTIONAL_TABLES = frozenset({
+    "fare_monitor_jobs", "fare_monitor_runs", "fare_monitor_observations",
+    "multi_leg_search_runs", "multi_leg_fare_observations", "multi_leg_search_outcomes",
+    "multi_leg_comparisons", "multi_leg_google_insights",
+})
+REQUIRED_TABLES = frozenset({"search_runs", "flight_results"})
 
 
 def _source_snapshot(path):
@@ -28,13 +34,14 @@ def _source_snapshot(path):
     source = sqlite3.connect(f"file:{path.resolve().as_posix()}?mode=ro", uri=True)
     source.row_factory = sqlite3.Row
     names = {row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    missing = set(TABLES) - names
     if not names:
         return source, {table: 0 for table in TABLES}
-    if missing:
+    missing_required = REQUIRED_TABLES - names
+    if missing_required:
         source.close()
-        raise ValueError("Source database schema is missing required application tables: " + ", ".join(sorted(missing)))
-    counts = {table: source.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0] for table in TABLES}
+        raise ValueError("Source database schema is missing required application tables: " + ", ".join(sorted(missing_required)))
+    counts = {table: source.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0]
+              if table in names else 0 for table in TABLES}
     violations = source.execute("PRAGMA foreign_key_check").fetchall()
     if violations:
         source.close()
@@ -51,7 +58,7 @@ def _source_sequences(source):
             if row[0] in TABLES}
 
 
-def migrate(source_path: Path, database_url: str, *, dry_run=False):
+def migrate(source_path: Path, database_url: str, *, dry_run=False, fail_after_rows=None):
     if not database_url:
         raise ValueError("DATABASE_URL is required; no credential-bearing URL is printed.")
     source, source_counts = _source_snapshot(source_path)
@@ -59,6 +66,7 @@ def migrate(source_path: Path, database_url: str, *, dry_run=False):
     previous_database_url = None
     try:
         source_sequences = _source_sequences(source)
+        source_tables = {row[0] for row in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         # Import after setting selection so the shared persistence module targets PostgreSQL.
         from flight_search.database import db
         previous_database_url = db.DATABASE_URL
@@ -82,8 +90,11 @@ def migrate(source_path: Path, database_url: str, *, dry_run=False):
             db.initialize_database()
             target = db.get_connection()
             try:
+                copied_rows = 0
                 with target:
                     for table in TABLES:
+                        if table not in source_tables:
+                            continue
                         columns = [row[1] for row in source.execute(f'PRAGMA table_info("{table}")')]
                         if not columns:
                             if source_counts[table] == 0:
@@ -95,6 +106,9 @@ def migrate(source_path: Path, database_url: str, *, dry_run=False):
                         rows = source.execute(f'SELECT {cols_sql} FROM "{table}"').fetchall()
                         for row in rows:
                             target.execute(insert_sql, tuple(row))
+                            copied_rows += 1
+                            if fail_after_rows is not None and copied_rows >= fail_after_rows:
+                                raise RuntimeError("Injected migration failure for rollback verification.")
                     for table in TABLES:
                         max_id = target.execute(f'SELECT MAX(id) FROM "{table}"').fetchone()[0] or 0
                         high_water = max(int(max_id), source_sequences.get(table, 0))

@@ -17,13 +17,11 @@ jobs:
     # Dispatch and schedule both require the explicit repository variable.
     if: ${{ vars.FARE_MONITOR_ENABLED == 'true' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # At most 50 serial requests × 30 seconds plus 5 minutes of setup and
+    # database/notification overhead = 30 minutes. No automatic retries.
+    timeout-minutes: 30
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
       FARE_MONITOR_ENABLED: ${{ vars.FARE_MONITOR_ENABLED }}
-      SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       MAX_WEB_SERPAPI_BUDGET: "50"
       MONITOR_MAX_SERPAPI_BUDGET: "50"
     steps:
@@ -35,9 +33,18 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
       - name: Require shared PostgreSQL configuration
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           if [ -z "${DATABASE_URL:-}" ]; then echo "DATABASE_URL secret is required; refusing ephemeral SQLite." >&2; exit 1; fi
       - name: Check shared database connectivity
         run: flask --app webapp db-ready
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - name: Run due monitoring jobs
         run: flask --app webapp run-due-monitors
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

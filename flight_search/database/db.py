@@ -235,7 +235,8 @@ def initialize_database():
             id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL REFERENCES fare_monitor_jobs(id) ON DELETE CASCADE,
             status TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT, serpapi_calls INTEGER NOT NULL DEFAULT 0,
             serpapi_budget INTEGER NOT NULL, coverage_json TEXT NOT NULL DEFAULT '{}', result_json TEXT NOT NULL DEFAULT '{}',
-            error TEXT, notification_sent INTEGER NOT NULL DEFAULT 0, notification_error TEXT
+            error TEXT, notification_sent INTEGER NOT NULL DEFAULT 0, notification_error TEXT,
+            accounting_status TEXT NOT NULL DEFAULT 'exact', recovery_hold_until TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_fare_monitor_due ON fare_monitor_jobs(enabled,next_run_at);
         CREATE INDEX IF NOT EXISTS idx_fare_monitor_runs_job ON fare_monitor_runs(job_id,id DESC);
@@ -336,6 +337,10 @@ def initialize_database():
         columns = {row[1] for row in connection.execute("PRAGMA table_info(fare_monitor_runs)")}
     if "notification_error" not in columns:
         connection.execute("ALTER TABLE fare_monitor_runs ADD COLUMN notification_error TEXT")
+    if "accounting_status" not in columns:
+        connection.execute("ALTER TABLE fare_monitor_runs ADD COLUMN accounting_status TEXT NOT NULL DEFAULT 'exact'")
+    if "recovery_hold_until" not in columns:
+        connection.execute("ALTER TABLE fare_monitor_runs ADD COLUMN recovery_hold_until TEXT")
     if DATABASE_URL:
         observation_columns = {row["column_name"] for row in connection.execute(
             "SELECT column_name FROM information_schema.columns WHERE table_name=?", ("fare_monitor_observations",))}
@@ -413,7 +418,7 @@ def claim_monitor_run(job_id, due_only=False):
         if not DATABASE_URL:
             connection.execute("BEGIN IMMEDIATE")
         with connection:
-            stale = connection.execute("""SELECT r.id,j.interval_days,j.timezone FROM fare_monitor_runs r JOIN fare_monitor_jobs j ON j.id=r.job_id
+            stale = connection.execute("""SELECT r.id,j.interval_days,j.timezone,r.serpapi_budget FROM fare_monitor_runs r JOIN fare_monitor_jobs j ON j.id=r.job_id
                 WHERE j.id=? AND j.running=1 AND r.status='running' AND r.started_at < ? ORDER BY r.id DESC LIMIT 1""",
                 (job_id, (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(timespec="seconds"))).fetchone()
             if stale:
@@ -421,17 +426,21 @@ def claim_monitor_run(job_id, due_only=False):
                 # budget. Do not reclaim in this scheduler invocation; defer
                 # the retry by a full interval and require the next poll.
                 next_after_recovery = (datetime.now(ZoneInfo(stale["timezone"])) + timedelta(days=int(stale["interval_days"]))).astimezone(timezone.utc).isoformat(timespec="seconds")
-                connection.execute("UPDATE fare_monitor_runs SET status='failed',finished_at=?,error='Execution lease expired; previous worker did not finish.' WHERE id=?",
-                                   (now, stale["id"]))
+                # Calls are not checkpointed durably while the external request
+                # executes. Conservatively charge the entire reserved run budget.
+                connection.execute("UPDATE fare_monitor_runs SET status='failed',finished_at=?,serpapi_calls=serpapi_budget,accounting_status='upper_bound',recovery_hold_until=?,coverage_json=?,result_json=?,error='Execution lease expired; provider usage is uncertain; maximum reserved budget charged.' WHERE id=?",
+                                   (now, next_after_recovery, json.dumps({"api_calls_remaining": 0, "accounting_status": "upper_bound"}),
+                                    json.dumps({"serpapi_calls": stale["serpapi_budget"], "serpapi_budget": stale["serpapi_budget"],
+                                                "accounting_status": "upper_bound"}), stale["id"]))
                 connection.execute("UPDATE fare_monitor_jobs SET running=0,last_run_at=?,next_run_at=? WHERE id=?",
                                    (now, next_after_recovery, job_id))
                 return None
-            recovery_hold = connection.execute("""SELECT j.next_run_at FROM fare_monitor_jobs j
-                JOIN fare_monitor_runs r ON r.job_id=j.id
+            recovery_hold = connection.execute("""SELECT r.recovery_hold_until FROM fare_monitor_runs r
+                JOIN fare_monitor_jobs j ON j.id=r.job_id
                 WHERE j.id=? AND r.status='failed'
-                  AND r.error='Execution lease expired; previous worker did not finish.'
+                  AND r.accounting_status='upper_bound'
                 ORDER BY r.id DESC LIMIT 1""", (job_id,)).fetchone()
-            if recovery_hold and recovery_hold["next_run_at"] and recovery_hold["next_run_at"] > now:
+            if recovery_hold and recovery_hold["recovery_hold_until"] and recovery_hold["recovery_hold_until"] > now:
                 # Applies to manual and scheduled claims. A manual button must
                 # not bypass the post-timeout cooldown and duplicate uncertain spend.
                 return None
