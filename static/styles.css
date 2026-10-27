@@ -54,3 +54,4 @@ body { margin:0; font-family:Inter, ui-sans-serif, system-ui, -apple-system, Bli
   .route-fields,.config-grid,.mode-fields { grid-template-columns:1fr; }
   .route-fields fieldset { padding:14px; }
 }
+.readiness { clear:both; margin:20px 0; border:1px solid var(--line); padding:14px; }.readiness summary { cursor:pointer; font-weight:700; }.readiness li { margin:7px 0; overflow-wrap:anywhere; }.table-scroll { overflow-x:auto; }.fare-history { width:100%; border-collapse:collapse; font-size:.85rem; }.fare-history th,.fare-history td { padding:10px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; }.fare-change { padding:8px 10px; background:#f5f7fa; }.fare-change.fare_decreased { border-left:3px solid #26865d; }.fare-change.fare_increased { border-left:3px solid #b64a34; }

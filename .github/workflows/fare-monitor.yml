@@ -11,17 +11,23 @@ permissions:
 jobs:
   run-due-monitors:
     if: ${{ vars.FARE_MONITOR_ENABLED == 'true' }}
-    runs-on: [self-hosted, fare-monitor]
+    runs-on: [self-hosted, linux, fare-monitor]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        # The workflow must also be installed on the default branch for cron
+        # to fire. After the target branch contains this feature, execute that
+        # code explicitly instead of whichever revision happens to be default.
+        with:
+          ref: codex/multi-leg-itinerary-search
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
       - name: Run due jobs against durable database
         env:
-          FLIGHT_DATABASE_PATH: ${{ secrets.FLIGHT_DATABASE_PATH }}
+          FARE_MONITOR_ENABLED: ${{ vars.FARE_MONITOR_ENABLED }}
+          FLIGHT_DATABASE_PATH: ${{ vars.FLIGHT_DATABASE_PATH }}
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

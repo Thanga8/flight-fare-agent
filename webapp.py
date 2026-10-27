@@ -6,6 +6,7 @@ import os
 import json
 import math
 import hmac
+import secrets
 from datetime import date, datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from functools import wraps
@@ -31,6 +32,7 @@ from flight_search.database.db import (
     initialize_database, save_monitor_job, get_monitor_job, list_monitor_jobs,
     delete_monitor_job, claim_monitor_run, finish_monitor_run, list_monitor_runs,
     mark_monitor_notification,
+    get_monitor_fare_history,
 )
 from flight_search.multi_leg import search_multi_leg_itineraries
 from flight_search.providers.serpapi_provider import SerpApiProvider
@@ -38,14 +40,26 @@ from flight_search.providers.serpapi_provider import SerpApiProvider
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "")
-MONITOR_MAX_BUDGET = min(MAX_WEB_SERPAPI_BUDGET, int(os.getenv("MONITOR_MAX_SERPAPI_BUDGET", "12")))
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "false").strip().lower() in {"1", "true", "yes", "on"})
+try:
+    MONITOR_MAX_BUDGET = min(MAX_WEB_SERPAPI_BUDGET, max(0, int(os.getenv("MONITOR_MAX_SERPAPI_BUDGET", "12"))))
+    MONITOR_BUDGET_CONFIG_ERROR = None
+except (TypeError, ValueError):
+    MONITOR_MAX_BUDGET = 0
+    MONITOR_BUDGET_CONFIG_ERROR = "MONITOR_MAX_SERPAPI_BUDGET must be an integer."
 MONITOR_DEFAULT_BUDGET = min(6, MONITOR_MAX_BUDGET)
 MONITOR_INTERVALS = {1, 2, 3, 7}
+try:
+    FARE_CHANGE_MIN_ABS_INR = max(0, float(os.getenv("FARE_CHANGE_MIN_ABS_INR", "1000")))
+    FARE_CHANGE_MIN_PERCENT = max(0, float(os.getenv("FARE_CHANGE_MIN_PERCENT", "3")))
+except (TypeError, ValueError):
+    FARE_CHANGE_MIN_ABS_INR, FARE_CHANGE_MIN_PERCENT = 1000, 3
 
 
 def _authorized():
     owner_password = os.getenv("MONITOR_OWNER_PASSWORD", "")
-    return bool(owner_password and app.secret_key and session.get("monitor_owner"))
+    return bool(len(owner_password) >= 12 and len(app.secret_key or "") >= 32 and session.get("monitor_owner"))
 
 
 def monitor_auth_required(function):
@@ -55,8 +69,21 @@ def monitor_auth_required(function):
             if request.path.startswith("/api/"):
                 return jsonify(error="Monitoring login required."), 401
             return redirect(url_for("monitor_login", next=request.path))
+        if request.method == "POST" and not _valid_csrf():
+            return jsonify(error="Request validation failed. Reload the page and try again."), 400
         return function(*args, **kwargs)
     return wrapped
+
+
+def _valid_csrf():
+    expected = session.get("csrf_token", "")
+    supplied = request.headers.get("X-CSRF-Token") or request.form.get("_csrf_token", "")
+    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+
+
+def _serpapi_key_configured():
+    value = os.getenv("SERPAPI_API_KEY", "").strip()
+    return bool(value and value.lower() not in {"none", "null", "changeme", "your_api_key", "your_serpapi_api_key"})
 
 
 def _next_run(interval_days, timezone_name):
@@ -92,7 +119,9 @@ def _monitor_config(data, current=None):
         if not code or len(code) > 100 or any(ord(c) < 32 for c in code):
             raise ValueError("Each leg needs a valid airport code or supported airport group.")
         codes[key] = code
-    enabled = str(value("enabled", "0")).lower() in {"1", "true", "on", "yes"}
+    # Create and update forms submit the complete configuration. An omitted
+    # checkbox therefore means explicitly paused in either operation.
+    enabled = str(data.get("enabled", "0")).lower() in {"1", "true", "on", "yes"}
     config = {"name": name, "enabled": int(enabled), "start_date": start.isoformat(), "end_date": end.isoformat(),
               "nights": nights, "interval_days": interval, "timezone": timezone_name, "api_budget": budget,
               "notify_telegram": int(str(value("notify_telegram", "0")).lower() in {"1", "true", "on", "yes"}), **codes}
@@ -101,39 +130,71 @@ def _monitor_config(data, current=None):
 
 
 def _execute_monitor(job):
-    if not os.getenv("SERPAPI_API_KEY"):
-        finish_monitor_run(job, "failed", error="SERPAPI_API_KEY is not configured.")
-        return None
+    if not _serpapi_key_configured():
+        error = "SERPAPI_API_KEY is missing or contains a placeholder value. Configure the provider credential before running a search."
+        finish_monitor_run(job, "failed", error=error)
+        return {"status": "failed", "error": error}
+    try:
+        run_budget = int(job["api_budget"])
+    except (KeyError, TypeError, ValueError):
+        run_budget = -1
+    if run_budget < 2 or run_budget > MONITOR_MAX_BUDGET or run_budget > MAX_WEB_SERPAPI_BUDGET:
+        error = f"Saved job budget is outside the current server limit (2–{MONITOR_MAX_BUDGET} calls). Update the job before running."
+        finish_monitor_run(job, "failed", error=error)
+        return {"status": "failed", "error": error}
     cursor = int(job.get("rotation_cursor", 0))
     try:
         provider = SerpApiProvider()
         report = search_multi_leg_itineraries(start_date=job["start_date"], end_date=job["end_date"],
-            international_provider=provider, serpapi_budget=int(job["api_budget"]), leg1_origin=job["leg1_origin"],
+            international_provider=provider, serpapi_budget=run_budget, leg1_origin=job["leg1_origin"],
             leg1_destination=job["leg1_destination"], leg2_origin=job["leg2_origin"], leg2_destination=job["leg2_destination"],
             nights_between_departures=int(job["nights"]), combined_candidate_limit=2, rotation_cursor=cursor)
-        status = "succeeded" if report.get("itineraries") else ("partially_succeeded" if report.get("serpapi_calls") else "failed")
-        error = report.get("incomplete_reason") or ("No priced itinerary was returned." if not report.get("itineraries") else None)
+        query_errors = any(leg.get("response_errors") for leg in report.get("leg_stats", []))
+        # Budget-based date sampling is the designed search plan. A run is
+        # incomplete only when a provider call failed or a planned stage was
+        # actually skipped after planning, not merely because the full window
+        # is larger than this run's conservative sample.
+        incomplete_stage = bool(report.get("incomplete_reason"))
+        status = "failed" if not report.get("serpapi_calls") else ("partially_succeeded" if query_errors or incomplete_stage else "succeeded")
+        error = report.get("incomplete_reason") or ("Some provider searches failed." if query_errors else None)
         finish_monitor_run(job, status, report, error, _next_run(int(job["interval_days"]), job["timezone"]) if job["enabled"] else None)
         if job.get("notify_telegram"):
+            if status != "succeeded":
+                mark_monitor_notification(job["run_id"], sent=False, error="Notification skipped because the search was failed or incomplete.")
+                return {"status": status, "report": report, "error": error}
+            useful_change = any(change.get("type") in {"new_itinerary", "fare_decreased", "fare_increased"}
+                                for change in report.get("fare_changes", []))
+            if report.get("itineraries") and not useful_change:
+                mark_monitor_notification(job["run_id"], sent=False, error="Notification skipped: no new itinerary or material fare change.")
+                return {"status": status, "report": report, "error": error}
             try:
                 sent = _send_monitor_notification(job, report, status)
                 mark_monitor_notification(job["run_id"], sent=sent,
                     error=None if sent else "Telegram bot token or chat ID is not configured.")
             except Exception as notification_error:
-                mark_monitor_notification(job["run_id"], sent=False, error=f"Telegram delivery failed: {notification_error}")
+                safe_notification_error = str(notification_error)
+                for secret in (os.getenv("TELEGRAM_BOT_TOKEN", ""), os.getenv("TELEGRAM_CHAT_ID", "")):
+                    if secret:
+                        safe_notification_error = safe_notification_error.replace(secret, "[redacted]")
+                mark_monitor_notification(job["run_id"], sent=False, error=f"Telegram delivery failed: {safe_notification_error}")
         return {"status": status, "report": report, "error": error}
     except Exception as error:
-        finish_monitor_run(job, "failed", error=str(error), next_run_at=_next_run(int(job["interval_days"]), job["timezone"]) if job["enabled"] else None)
-        return {"status": "failed", "error": str(error)}
+        safe_error = str(error)
+        for secret_name in ("SERPAPI_API_KEY", "TELEGRAM_BOT_TOKEN", "MONITOR_OWNER_PASSWORD", "FLASK_SECRET_KEY"):
+            secret = os.getenv(secret_name, "")
+            if secret:
+                safe_error = safe_error.replace(secret, "[redacted]")
+        finish_monitor_run(job, "failed", error=safe_error, next_run_at=_next_run(int(job["interval_days"]), job["timezone"]) if job["enabled"] else None)
+        return {"status": "failed", "error": safe_error}
 
 
 def _send_monitor_notification(job, report, status):
-    token, chat_id = os.getenv("TELEGRAM_BOT_TOKEN"), os.getenv("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
+    token, chat_id = os.getenv("TELEGRAM_BOT_TOKEN", "").strip(), os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id or token.lower() in {"none", "null", "changeme", "your_bot_token"}:
         return False
     import requests
     best = min(report.get("itineraries", []), key=lambda item: item.get("total_price_inr", float("inf")), default=None)
-    plan = report.get("planned_usage", {})
+    changes = report.get("fare_changes", [])
     combined = report.get("combined_results", [])
     verified = sum(result.get("status") == "priced" for result in combined)
     combined_status = f"{verified}/{len(combined)} combined checks priced" if combined else "no combined checks completed"
@@ -144,6 +205,28 @@ def _send_monitor_notification(job, report, status):
                f"Fare check: {job['name']}\nStatus: {status} · no newly priced itinerary\nWindow: {job['start_date']} to {job['end_date']} · completed {datetime.now(ZoneInfo(job['timezone'])).isoformat(timespec='minutes')}")
     message += (f"\nCoverage: {report.get('covered_date_pairs', 0)}/{report.get('valid_date_pairs', 0)} date pairs; "
                 f"{combined_status}\nSerpApi calls: {report.get('serpapi_calls', 0)}/{job['api_budget']}")
+    summary = report.get("fare_change_summary", {})
+    message += (f"\nFare changes: {summary.get('new_itinerary', 0)} new, "
+                f"{summary.get('fare_decreased', 0)} decreased, {summary.get('fare_increased', 0)} increased, "
+                f"{summary.get('no_material_change', 0)} unchanged, {summary.get('not_observed', 0)} not observed")
+    shown_changes = 0
+    for change in changes:
+        if change["type"] in {"fare_decreased", "fare_increased"}:
+            if shown_changes >= 5:
+                break
+            message += (f"\n{change['type'].replace('_', ' ').title()}: {change['route']} "
+                        f"({change['leg1_date']} / {change['leg2_date']}) · {change['currency']} {change['previous_fare']:,.0f} → "
+                        f"{change['currency']} {change['current_fare']:,.0f} (Δ {change['currency']} {change['absolute_change']:,.0f}; "
+                        f"{change['percentage_change']:+.2f}%)")
+            shown_changes += 1
+        elif change["type"] == "new_itinerary":
+            if shown_changes >= 5:
+                break
+            message += f"\nNew itinerary: {change['route']} ({change['leg1_date']} / {change['leg2_date']}) · {change['currency']} {change['fare']:,.0f}"
+            shown_changes += 1
+    total_alertable = sum(change.get("type") in {"new_itinerary", "fare_decreased", "fare_increased"} for change in changes)
+    if total_alertable > shown_changes:
+        message += f"\n{total_alertable - shown_changes} additional new/material changes are in the dashboard."
     if report.get("incomplete_reason"):
         message += f"\nLimit: {report['incomplete_reason']}"
     message += "\nObserved fares may change before booking."
@@ -154,21 +237,26 @@ def _send_monitor_notification(job, report, status):
 
 @app.get("/monitor/login")
 def monitor_login():
-    return render_template("monitor_login.html", error=None)
+    session.setdefault("csrf_token", secrets.token_urlsafe(32))
+    return render_template("monitor_login.html", error=None, csrf_token=session["csrf_token"])
 
 
 @app.post("/monitor/login")
 def monitor_login_post():
     expected = os.getenv("MONITOR_OWNER_PASSWORD", "")
-    if not expected or not app.secret_key:
-        return render_template("monitor_login.html", error="Set MONITOR_OWNER_PASSWORD and FLASK_SECRET_KEY to enable monitoring."), 503
+    if len(expected) < 12 or len(app.secret_key or "") < 32:
+        return render_template("monitor_login.html", error="Configure MONITOR_OWNER_PASSWORD (at least 12 characters) and FLASK_SECRET_KEY (at least 32 characters) on the web service.", csrf_token=session.setdefault("csrf_token", secrets.token_urlsafe(32))), 503
+    if not _valid_csrf():
+        return render_template("monitor_login.html", error="Request validation failed. Reload the page and try again.", csrf_token=session.setdefault("csrf_token", secrets.token_urlsafe(32))), 400
     if not hmac.compare_digest(request.form.get("password", ""), expected):
-        return render_template("monitor_login.html", error="Password was not accepted."), 401
+        return render_template("monitor_login.html", error="Password was not accepted.", csrf_token=session["csrf_token"]), 401
     session["monitor_owner"] = True
+    session["csrf_token"] = secrets.token_urlsafe(32)
     return redirect(url_for("monitor_dashboard"))
 
 
 @app.post("/monitor/logout")
+@monitor_auth_required
 def monitor_logout():
     session.clear()
     return redirect(url_for("index"))
@@ -180,15 +268,46 @@ def monitor_dashboard():
     initialize_database()
     jobs = list_monitor_jobs()
     runs = {str(job["id"]): list_monitor_runs(job["id"]) for job in jobs}
+    histories = {str(job["id"]): get_monitor_fare_history(job["id"]) for job in jobs}
     for job_runs in runs.values():
         for run in job_runs:
             try:
                 run["result"] = json.loads(run["result_json"] or "{}")
             except (TypeError, json.JSONDecodeError):
                 run["result"] = {}
-    return render_template("monitor.html", jobs=jobs, runs=runs,
+    session.setdefault("csrf_token", secrets.token_urlsafe(32))
+    return render_template("monitor.html", jobs=jobs, runs=runs, histories=histories, csrf_token=session["csrf_token"],
                            max_budget=MONITOR_MAX_BUDGET, default_budget=MONITOR_DEFAULT_BUDGET,
-                           scheduler_ready=bool(os.getenv("FLIGHT_DATABASE_PATH") and os.getenv("MONITOR_OWNER_PASSWORD") and os.getenv("FLASK_SECRET_KEY")))
+                           readiness=_monitor_readiness())
+
+
+def _monitor_readiness():
+    checks = {
+        "owner_auth": (len(os.getenv("FLASK_SECRET_KEY", "")) >= 32 and len(os.getenv("MONITOR_OWNER_PASSWORD", "")) >= 12, "Set FLASK_SECRET_KEY (at least 32 characters) and MONITOR_OWNER_PASSWORD (at least 12 characters) on the web service."),
+        "search_provider": (_serpapi_key_configured(), "Set SERPAPI_API_KEY on the web service and scheduler host. Presence is checked locally; provider acceptance requires a live request."),
+        "database_path": (bool(os.getenv("FLIGHT_DATABASE_PATH")), "Set FLIGHT_DATABASE_PATH to the same persistent database path for the web service and runner."),
+        "request_budget": (MONITOR_BUDGET_CONFIG_ERROR is None and MONITOR_MAX_BUDGET >= 2, MONITOR_BUDGET_CONFIG_ERROR or "Set MONITOR_MAX_SERPAPI_BUDGET and MAX_WEB_SERPAPI_BUDGET to allow at least 2 calls."),
+        "scheduler_gate": (os.getenv("FARE_MONITOR_ENABLED", "").lower() == "true", "Set repository variable FARE_MONITOR_ENABLED=true only after runner and shared storage are ready."),
+        "telegram": (bool(os.getenv("TELEGRAM_BOT_TOKEN", "").strip() and os.getenv("TELEGRAM_CHAT_ID", "").strip()), "Telegram is optional; configure both TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID if notifications are enabled."),
+    }
+    try:
+        initialize_database()
+        from flight_search.database.db import check_database_readiness
+        check_database_readiness()
+        database = {"status": "ready", "message": "Database is reachable and writable."}
+    except Exception:
+        database = {"status": "missing", "message": "Database is unavailable or read-only; verify FLIGHT_DATABASE_PATH and filesystem access."}
+    return {"monitoring_enabled": os.getenv("FARE_MONITOR_ENABLED", "").lower() == "true",
+            "checks": {name: {"status": "ready" if ok else "missing", "message": note} for name, (ok, note) in checks.items()},
+            "database": database,
+            "scheduler": {"status": "configured" if os.getenv("GITHUB_ACTIONS") == "true" and os.getenv("RUNNER_NAME") else "not_verified",
+                          "message": "Runner environment detected; this does not verify workflow branch, shared mount, or a successful run." if os.getenv("GITHUB_ACTIONS") == "true" and os.getenv("RUNNER_NAME") else "A self-hosted runner and workflow on the repository default branch are required."}}
+
+
+@app.get("/api/monitor/readiness")
+@monitor_auth_required
+def monitor_readiness():
+    return jsonify(_monitor_readiness())
 
 
 @app.post("/api/monitor/jobs")
@@ -235,6 +354,9 @@ def monitor_delete(job_id):
 @app.cli.command("run-due-monitors")
 def run_due_monitors():
     """Run due jobs once; invoke from a persistent scheduled worker."""
+    if os.getenv("FARE_MONITOR_ENABLED", "").lower() != "true":
+        print("Fare monitoring scheduler gate is disabled; no jobs were run.")
+        return
     for job in list_monitor_jobs():
         claimed = claim_monitor_run(job["id"], due_only=True)
         if claimed:
@@ -328,7 +450,7 @@ def search():
         form_data["combined_cache_mode"],
     )
     needs_live_api = "live" in modes
-    if needs_live_api and not os.getenv("SERPAPI_API_KEY"):
+    if needs_live_api and not _serpapi_key_configured():
         return _render_index(
             form_data,
             "Missing SERPAPI_API_KEY in .env for the selected live searches.",

@@ -1,8 +1,10 @@
 import sqlite3
 import os
+import math
 import hashlib
 import json
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -173,6 +175,16 @@ def initialize_database():
         );
         CREATE INDEX IF NOT EXISTS idx_fare_monitor_due ON fare_monitor_jobs(enabled,next_run_at);
         CREATE INDEX IF NOT EXISTS idx_fare_monitor_runs_job ON fare_monitor_runs(job_id,id DESC);
+        CREATE TABLE IF NOT EXISTS fare_monitor_observations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, job_id INTEGER NOT NULL REFERENCES fare_monitor_jobs(id) ON DELETE CASCADE,
+            run_id INTEGER NOT NULL REFERENCES fare_monitor_runs(id) ON DELETE CASCADE,
+            identity_key TEXT NOT NULL, identity_json TEXT NOT NULL, route TEXT NOT NULL,
+            itinerary_label TEXT NOT NULL DEFAULT '', leg1_date TEXT NOT NULL, leg2_date TEXT NOT NULL, fare REAL NOT NULL, currency TEXT NOT NULL,
+            observed_at TEXT NOT NULL, itinerary_json TEXT NOT NULL,
+            UNIQUE(job_id,run_id,identity_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_fare_monitor_observation_identity
+        ON fare_monitor_observations(job_id,identity_key,observed_at);
         CREATE TABLE IF NOT EXISTS multi_leg_search_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             searched_at TEXT NOT NULL,
@@ -259,6 +271,10 @@ def initialize_database():
     if "notification_error" not in columns:
         connection.execute("ALTER TABLE fare_monitor_runs ADD COLUMN notification_error TEXT")
         connection.commit()
+    observation_columns = {row[1] for row in connection.execute("PRAGMA table_info(fare_monitor_observations)")}
+    if "itinerary_label" not in observation_columns:
+        connection.execute("ALTER TABLE fare_monitor_observations ADD COLUMN itinerary_label TEXT NOT NULL DEFAULT ''")
+        connection.commit()
 
     connection.close()
 
@@ -323,14 +339,17 @@ def claim_monitor_run(job_id, due_only=False):
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     connection = get_connection()
     try:
+        connection.execute("BEGIN IMMEDIATE")
         with connection:
-            stale = connection.execute("""SELECT r.id FROM fare_monitor_runs r JOIN fare_monitor_jobs j ON j.id=r.job_id
+            stale = connection.execute("""SELECT r.id,j.interval_days,j.timezone FROM fare_monitor_runs r JOIN fare_monitor_jobs j ON j.id=r.job_id
                 WHERE j.id=? AND j.running=1 AND r.status='running' AND r.started_at < ? ORDER BY r.id DESC LIMIT 1""",
                 (job_id, (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(timespec="seconds"))).fetchone()
             if stale:
+                next_after_recovery = (datetime.now(ZoneInfo(stale["timezone"])) + timedelta(days=int(stale["interval_days"]))).astimezone(timezone.utc).isoformat(timespec="seconds")
                 connection.execute("UPDATE fare_monitor_runs SET status='failed',finished_at=?,error='Execution lease expired; previous worker did not finish.' WHERE id=?",
                                    (now, stale["id"]))
-                connection.execute("UPDATE fare_monitor_jobs SET running=0 WHERE id=?", (job_id,))
+                connection.execute("UPDATE fare_monitor_jobs SET running=0,last_run_at=?,next_run_at=? WHERE id=?",
+                                   (now, next_after_recovery, job_id))
             clause = "id=? AND enabled=1 AND running=0 AND (next_run_at IS NULL OR next_run_at<=?)" if due_only else "id=? AND running=0"
             params = (job_id, now) if due_only else (job_id,)
             row = connection.execute(f"SELECT * FROM fare_monitor_jobs WHERE {clause}", params).fetchone()
@@ -350,10 +369,53 @@ def finish_monitor_run(job, status, report=None, error=None, next_run_at=None):
     initialize_database()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     report = report or {}
-    coverage = {key: report.get(key) for key in ("valid_date_pairs", "covered_date_pairs", "combined_searches", "planned_usage", "serpapi_budget")}
+    if status == "succeeded":
+        from flight_search.monitoring import classify_fare_changes, normalize_run_itineraries
+        current = normalize_run_itineraries(report, job)
+    else:
+        current = []
     connection = get_connection()
     try:
         with connection:
+            changes = []
+            if status == "succeeded":
+                previous_run = connection.execute("SELECT id FROM fare_monitor_runs WHERE job_id=? AND status='succeeded' AND id<>? ORDER BY id DESC LIMIT 1",
+                                                  (job["id"], job["run_id"])).fetchone()
+                previous_run_observations = []
+                if previous_run:
+                    previous_run_observations = [dict(row) for row in connection.execute("SELECT * FROM fare_monitor_observations WHERE run_id=?", (previous_run["id"],))]
+                latest_observations = [dict(row) for row in connection.execute("""SELECT o.* FROM fare_monitor_observations o
+                    JOIN fare_monitor_runs r ON r.id=o.run_id WHERE o.job_id=? AND r.status='succeeded'
+                    ORDER BY o.observed_at DESC,o.id DESC""", (job["id"],))]
+                latest_by_identity = {}
+                for observation in latest_observations:
+                    latest_by_identity.setdefault(observation["identity_key"], observation)
+                previous = list(latest_by_identity.values())
+                for observation in current:
+                    observation["observed_at"] = now
+                def threshold(name, default):
+                    try:
+                        parsed = float(os.getenv(name, str(default)))
+                        return parsed if math.isfinite(parsed) and parsed >= 0 else default
+                    except (TypeError, ValueError):
+                        return default
+                changes = classify_fare_changes(current, previous,
+                    previous_run=previous_run_observations,
+                    min_absolute_inr=threshold("FARE_CHANGE_MIN_ABS_INR", 1000),
+                    min_percent=threshold("FARE_CHANGE_MIN_PERCENT", 3))
+                for observation in current:
+                    connection.execute("""INSERT OR IGNORE INTO fare_monitor_observations
+                        (job_id,run_id,identity_key,identity_json,route,itinerary_label,leg1_date,leg2_date,fare,currency,observed_at,itinerary_json)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        (job["id"], job["run_id"], observation["identity_key"], json.dumps(observation["identity"], sort_keys=True),
+                         observation["route"], observation["itinerary_label"], observation["leg1_date"], observation["leg2_date"], observation["fare"],
+                         observation["currency"], now, json.dumps(observation["itinerary"], ensure_ascii=False, sort_keys=True)))
+            report["fare_changes"] = changes
+            report["fare_change_summary"] = {kind: sum(change["type"] == kind for change in changes)
+                for kind in ("new_itinerary", "fare_decreased", "fare_increased", "no_material_change", "not_observed", "currency_mismatch")}
+            report["fare_comparison_status"] = "compared" if status == "succeeded" else "unavailable: search did not complete successfully"
+            report["api_calls_remaining"] = max(0, int(report.get("serpapi_budget", job["api_budget"])) - int(report.get("serpapi_calls", 0)))
+            coverage = {key: report.get(key) for key in ("valid_date_pairs", "covered_date_pairs", "combined_searches", "planned_usage", "serpapi_budget", "api_calls_remaining", "fare_change_summary")}
             connection.execute("UPDATE fare_monitor_runs SET status=?,finished_at=?,serpapi_calls=?,coverage_json=?,result_json=?,error=? WHERE id=?",
                 (status, now, report.get("serpapi_calls", 0), json.dumps(coverage), json.dumps(report, default=str), error, job["run_id"]))
             connection.execute("UPDATE fare_monitor_jobs SET running=0,last_run_at=?,next_run_at=?,rotation_cursor=rotation_cursor+1 WHERE id=?",
@@ -378,6 +440,27 @@ def mark_monitor_notification(run_id, *, sent, error=None):
         with connection:
             connection.execute("UPDATE fare_monitor_runs SET notification_sent=?,notification_error=? WHERE id=?",
                                (int(sent), error, run_id))
+    finally:
+        connection.close()
+
+
+def get_monitor_fare_history(job_id, limit=100):
+    initialize_database()
+    connection = get_connection()
+    try:
+        return [dict(row) for row in connection.execute("""SELECT o.*,r.status AS run_status FROM fare_monitor_observations o
+            JOIN fare_monitor_runs r ON r.id=o.run_id WHERE o.job_id=? ORDER BY o.observed_at DESC,o.id DESC LIMIT ?""",
+            (job_id, limit))]
+    finally:
+        connection.close()
+
+
+def check_database_readiness():
+    """Check access to the configured DB without leaving any writes behind."""
+    connection = get_connection()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.rollback()
     finally:
         connection.close()
 
