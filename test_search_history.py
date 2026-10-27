@@ -3,20 +3,21 @@ from search_history import (
 )
 
 
-print("=" * 70)
-print("PRICE INTELLIGENCE TEST")
-print("=" * 70)
+def main():
+    print("=" * 70)
+    print("PRICE INTELLIGENCE TEST")
+    print("=" * 70)
 
 
 # ==========================================
 # TEST 1 — EXACT DATE HISTORY
 # ==========================================
 
-print()
-print("TEST 1 — EXACT DATE HISTORY")
-print("-" * 70)
+    print()
+    print("TEST 1 — EXACT DATE HISTORY")
+    print("-" * 70)
 
-result = analyze_price_intelligence(
+    result = analyze_price_intelligence(
 
     origin="HYD",
 
@@ -30,7 +31,7 @@ result = analyze_price_intelligence(
 
 )
 
-print(result)
+    print(result)
 
 
 # ==========================================
@@ -38,11 +39,11 @@ print(result)
 # SHOULD FALL BACK TO COMPARABLE HISTORY
 # ==========================================
 
-print()
-print("TEST 2 — COMPARABLE HISTORICAL DATA")
-print("-" * 70)
+    print()
+    print("TEST 2 — COMPARABLE HISTORICAL DATA")
+    print("-" * 70)
 
-result = analyze_price_intelligence(
+    result = analyze_price_intelligence(
 
     origin="HYD",
 
@@ -56,18 +57,18 @@ result = analyze_price_intelligence(
 
 )
 
-print(result)
+    print(result)
 
 
 # ==========================================
 # TEST 3 — COMPLETELY NEW ROUTE
 # ==========================================
 
-print()
-print("TEST 3 — NO HISTORICAL DATA")
-print("-" * 70)
+    print()
+    print("TEST 3 — NO HISTORICAL DATA")
+    print("-" * 70)
 
-result = analyze_price_intelligence(
+    result = analyze_price_intelligence(
 
     origin="HYD",
 
@@ -81,10 +82,14 @@ result = analyze_price_intelligence(
 
 )
 
-print(result)
+    print(result)
 
 
-print()
-print("=" * 70)
-print("TEST COMPLETE")
-print("=" * 70)
+    print()
+    print("=" * 70)
+    print("TEST COMPLETE")
+    print("=" * 70)
+
+
+if __name__ == "__main__":
+    main()

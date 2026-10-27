@@ -24,6 +24,7 @@ jobs:
       FARE_MONITOR_ENABLED: ${{ vars.FARE_MONITOR_ENABLED }}
       MAX_WEB_SERPAPI_BUDGET: "50"
       MONITOR_MAX_SERPAPI_BUDGET: "50"
+      MONITOR_MAX_DAILY_SERPAPI_BUDGET: "50"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

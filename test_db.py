@@ -2,6 +2,11 @@
 
 from flight_search.database.db import list_database_tables
 
-print("Tables:")
-for table in list_database_tables():
-    print(f"- {table}")
+def main():
+    print("Tables:")
+    for table in list_database_tables():
+        print(f"- {table}")
+
+
+if __name__ == "__main__":
+    main()

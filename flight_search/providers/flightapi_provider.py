@@ -79,14 +79,19 @@ class FlightApiProvider(FlightSearchProvider):
             return_date=return_date,
         )
 
-        response = self.session.get(
-            url,
-            timeout=self.timeout,
-        )
-
-        response.raise_for_status()
-
-        return response.json()
+        try:
+            response = self.session.get(url, timeout=self.timeout)
+            response.raise_for_status()
+            payload = response.json()
+        except requests.RequestException:
+            # The API key is part of FlightAPI's documented path format, which
+            # requests exceptions may echo. Never surface that URL to logs/UI.
+            raise RuntimeError("FlightAPI request failed; response details were suppressed to protect credentials.") from None
+        except ValueError:
+            raise RuntimeError("FlightAPI returned an invalid JSON response.") from None
+        if not isinstance(payload, dict):
+            raise RuntimeError("FlightAPI returned an unexpected response format.")
+        return payload
 
     @staticmethod
     def _iter_dicts_with_price(

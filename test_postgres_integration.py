@@ -130,6 +130,16 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
             claims = list(pool.map(lambda _i: db.claim_monitor_run(job["id"]), range(8)))
         self.assertEqual(1, sum(claim is not None for claim in claims))
 
+    def test_global_daily_budget_serializes_claims_across_jobs(self):
+        with patch.dict(os.environ, {"MONITOR_MAX_DAILY_SERPAPI_BUDGET": "2"}):
+            jobs = [self.create_monitor_job("Daily cap A"), self.create_monitor_job("Daily cap B")]
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                claims = list(pool.map(lambda job: db.claim_monitor_run(job["id"]), jobs))
+            self.assertEqual(1, sum(claim is not None for claim in claims))
+            budget = db.get_monitor_daily_budget_status()
+            self.assertEqual(2, budget["used"])
+            self.assertEqual(0, budget["remaining"])
+
     def test_interrupted_run_recovery_charges_upper_bound_and_holds_retry(self):
         job = self.create_monitor_job()
         claim = db.claim_monitor_run(job["id"])

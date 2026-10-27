@@ -174,10 +174,11 @@ class FareMonitorTests(unittest.TestCase):
         job = db.list_monitor_jobs()[0]
         connection = db.get_connection()
         with connection:
-            connection.execute("UPDATE fare_monitor_jobs SET api_budget=99 WHERE id=?", (job["id"],))
+            connection.execute("UPDATE fare_monitor_jobs SET api_budget=30 WHERE id=?", (job["id"],))
         connection.close()
         claim = db.claim_monitor_run(job["id"])
         with patch.dict(os.environ, {"SERPAPI_API_KEY": "mock-key"}), \
+             patch.object(webapp, "MONITOR_MAX_BUDGET", 20), \
              patch.object(webapp, "search_multi_leg_itineraries") as search:
             result = webapp._execute_monitor(claim)
         self.assertEqual("failed", result["status"])
@@ -195,6 +196,52 @@ class FareMonitorTests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=8) as pool:
             claims = list(pool.map(lambda _: db.claim_monitor_run(job["id"], due_only=True), range(8)))
         self.assertEqual(1, sum(claim is not None for claim in claims))
+
+    def test_daily_budget_serializes_claims_across_different_jobs(self):
+        self.login()
+        with patch.dict(os.environ, {"MONITOR_MAX_DAILY_SERPAPI_BUDGET": "2"}):
+            self.post("/api/monitor/jobs", self.create_data(name="Daily budget A", enabled="1", api_budget="2"))
+            self.post("/api/monitor/jobs", self.create_data(name="Daily budget B", enabled="1", api_budget="2"))
+            jobs = db.list_monitor_jobs()
+            connection = db.get_connection()
+            with connection:
+                for job in jobs:
+                    connection.execute("UPDATE fare_monitor_jobs SET next_run_at=? WHERE id=?",
+                                       ("2000-01-01T00:00:00+00:00", job["id"]))
+            connection.close()
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                claims = list(pool.map(lambda job: db.claim_monitor_run(job["id"], due_only=True), jobs))
+            self.assertEqual(1, sum(claim is not None for claim in claims))
+            budget = db.get_monitor_daily_budget_status()
+            self.assertEqual(2, budget["used"])
+            self.assertEqual(0, budget["remaining"])
+
+    def test_unexpected_provider_error_charges_conservative_run_budget(self):
+        self.login()
+        self.post("/api/monitor/jobs", self.create_data(api_budget="4"))
+        job = db.list_monitor_jobs()[0]
+        claim = db.claim_monitor_run(job["id"])
+        with patch.dict(os.environ, {"SERPAPI_API_KEY": "mock-only"}), \
+             patch.object(webapp, "SerpApiProvider"), \
+             patch.object(webapp, "search_multi_leg_itineraries", side_effect=RuntimeError("mock transport failure")):
+            result = webapp._execute_monitor(claim)
+        self.assertEqual("failed", result["status"])
+        run = db.list_monitor_runs(job["id"])[0]
+        self.assertEqual("upper_bound", run["accounting_status"])
+        self.assertEqual(4, run["serpapi_calls"])
+
+    def test_provider_construction_failure_does_not_charge_search_budget(self):
+        self.login()
+        self.post("/api/monitor/jobs", self.create_data(api_budget="4"))
+        job = db.list_monitor_jobs()[0]
+        claim = db.claim_monitor_run(job["id"])
+        with patch.dict(os.environ, {"SERPAPI_API_KEY": "mock-only"}), \
+             patch.object(webapp, "SerpApiProvider", side_effect=RuntimeError("local configuration error")):
+            result = webapp._execute_monitor(claim)
+        self.assertEqual("failed", result["status"])
+        run = db.list_monitor_runs(job["id"])[0]
+        self.assertEqual("exact", run["accounting_status"])
+        self.assertEqual(0, run["serpapi_calls"])
 
     def test_stale_runner_records_failure_and_defers_automatic_reexecution(self):
         self.login()

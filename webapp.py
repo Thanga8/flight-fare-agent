@@ -33,6 +33,7 @@ from flight_search.database.db import (
     delete_monitor_job, claim_monitor_run, finish_monitor_run, list_monitor_runs,
     mark_monitor_notification,
     get_monitor_fare_history,
+    get_monitor_daily_budget_status,
 )
 from flight_search.multi_leg import search_multi_leg_itineraries
 from flight_search.providers.serpapi_provider import SerpApiProvider
@@ -143,8 +144,10 @@ def _execute_monitor(job):
         finish_monitor_run(job, "failed", error=error)
         return {"status": "failed", "error": error}
     cursor = int(job.get("rotation_cursor", 0))
+    provider_started = False
     try:
         provider = SerpApiProvider()
+        provider_started = True
         report = search_multi_leg_itineraries(start_date=job["start_date"], end_date=job["end_date"],
             international_provider=provider, serpapi_budget=run_budget, leg1_origin=job["leg1_origin"],
             leg1_destination=job["leg1_destination"], leg2_origin=job["leg2_origin"], leg2_destination=job["leg2_destination"],
@@ -184,7 +187,8 @@ def _execute_monitor(job):
             secret = os.getenv(secret_name, "")
             if secret:
                 safe_error = safe_error.replace(secret, "[redacted]")
-        finish_monitor_run(job, "failed", error=safe_error, next_run_at=_next_run(int(job["interval_days"]), job["timezone"]) if job["enabled"] else None)
+        finish_monitor_run(job, "failed", error=safe_error, next_run_at=_next_run(int(job["interval_days"]), job["timezone"]) if job["enabled"] else None,
+                           accounting_status="upper_bound" if provider_started else "exact")
         return {"status": "failed", "error": safe_error}
 
 
@@ -297,8 +301,13 @@ def _monitor_readiness():
         database = {"status": "ready", "message": "Database is reachable."}
     except Exception:
         database = {"status": "missing", "message": "Database is unavailable; verify the configured database connection and network access."}
+    try:
+        daily_budget = get_monitor_daily_budget_status()
+    except Exception:
+        daily_budget = {"limit": 0, "used": None, "remaining": 0, "timezone": "UTC"}
     return {"monitoring_enabled": os.getenv("FARE_MONITOR_ENABLED", "").lower() == "true",
             "checks": {name: {"status": "ready" if ok else "missing", "message": note} for name, (ok, note) in checks.items()},
+            "daily_budget": daily_budget,
             "database": database,
             "scheduler": {"status": "configured" if os.getenv("GITHUB_ACTIONS") == "true" and os.getenv("RUNNER_NAME") else "not_verified",
                           "message": "GitHub-hosted runner environment detected; this does not verify the workflow schedule or a successful run." if os.getenv("GITHUB_ACTIONS") == "true" else "GitHub Actions must be deliberately configured; scheduled events use the workflow on the repository default branch."}}

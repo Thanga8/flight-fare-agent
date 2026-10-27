@@ -8,10 +8,11 @@ The app now supports both local SQLite and shared PostgreSQL. `DATABASE_URL` tak
 
 - Monitoring is disabled unless `FARE_MONITOR_ENABLED` is literally `true` in the GitHub repository variable and the workflow's job-level gate passes.
 - `workflow_dispatch` has no bypass input. The CLI also checks the environment gate.
-- Workflow runs are serialized and not cancelled while in progress. Job timeout is 15 minutes.
+- Workflow runs are serialized and not cancelled while in progress. The 30-minute timeout covers 50 sequential 30-second requests plus five minutes of setup and database/notification overhead.
 - PostgreSQL monitor claims lock the job row with `FOR UPDATE`; SQLite uses `BEGIN IMMEDIATE`.
-- New monitor jobs default to 6 SerpApi requests. Existing saved budgets remain unchanged. The web, monitor, and multi-leg ceilings are capped at 50 calls per run. This is not an account-wide or daily provider quota.
-- A stale running lease is failed and deferred by the job interval before a later run can claim it.
+- New monitor jobs default to 6 SerpApi requests. Existing saved budgets remain unchanged. The web, monitor, and multi-leg ceilings are capped at 50 calls per run. A global UTC-day monitor ceiling defaults to 50 (`MONITOR_MAX_DAILY_SERPAPI_BUDGET` may lower it); active jobs reserve their whole budget under a cross-job database lock. This does not include manual web searches or calls outside monitor jobs.
+- Completed runs count reported calls. Interrupted or otherwise uncertain runs count the full reserved budget, are marked `upper_bound`, and hold retries for the job interval. Actual provider usage after abrupt termination cannot be reconstructed exactly.
+- PostgreSQL uses both a global advisory transaction lock for daily reservations and `FOR UPDATE` on the job row; SQLite uses `BEGIN IMMEDIATE`.
 
 ## Workflow deployment
 

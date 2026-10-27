@@ -15,6 +15,7 @@
   <details class="readiness">
     <summary>Configuration readiness</summary>
     <p>Monitoring gate: {{ 'enabled' if readiness.monitoring_enabled else 'disabled' }}. This check does not prove a live provider request or Telegram delivery.</p>
+    <p>Daily monitoring API ceiling: {{ readiness.daily_budget.used if readiness.daily_budget.used is not none else 'unknown' }}/{{ readiness.daily_budget.limit }} calls used ({{ readiness.daily_budget.remaining }} remaining, UTC). Running and uncertain jobs reserve their full per-run budget.</p>
     <ul>
       {% for name, check in readiness.checks.items() %}
       <li><strong>{{ name }}:</strong> {{ check.status }} · {{ check.message }}</li>

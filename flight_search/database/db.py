@@ -409,6 +409,35 @@ def delete_monitor_job(job_id):
         connection.close()
 
 
+def monitor_daily_budget_limit():
+    """Return a fail-closed daily ceiling, capped at the existing 50-call limit."""
+    try:
+        configured = int(os.getenv("MONITOR_MAX_DAILY_SERPAPI_BUDGET", "50"))
+        if configured < 0:
+            return 0
+        return min(configured, 50)
+    except (TypeError, ValueError):
+        return 0
+
+
+def get_monitor_daily_budget_status(now=None):
+    """Return UTC-day monitor usage, counting running/uncertain jobs at their full reservation."""
+    initialize_database()
+    now = now or datetime.now(timezone.utc)
+    start = now.astimezone(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+    connection = get_connection()
+    try:
+        row = connection.execute("""SELECT COALESCE(SUM(CASE
+            WHEN status='running' OR accounting_status='upper_bound' THEN serpapi_budget
+            ELSE serpapi_calls END),0) AS used
+            FROM fare_monitor_runs WHERE started_at>=? OR finished_at>=? OR status='running'""", (start, start)).fetchone()
+        limit = monitor_daily_budget_limit()
+        used = int(row["used"])
+        return {"limit": limit, "used": used, "remaining": max(0, limit - used), "timezone": "UTC"}
+    finally:
+        connection.close()
+
+
 def claim_monitor_run(job_id, due_only=False):
     """Atomically claim a manual or due run so two workers cannot overlap."""
     initialize_database()
@@ -418,6 +447,9 @@ def claim_monitor_run(job_id, due_only=False):
         if not DATABASE_URL:
             connection.execute("BEGIN IMMEDIATE")
         with connection:
+            if DATABASE_URL:
+                # Serialize reservations across different jobs as well as within one job.
+                connection.execute("SELECT pg_advisory_xact_lock(731204992)")
             stale = connection.execute("""SELECT r.id,j.interval_days,j.timezone,r.serpapi_budget FROM fare_monitor_runs r JOIN fare_monitor_jobs j ON j.id=r.job_id
                 WHERE j.id=? AND j.running=1 AND r.status='running' AND r.started_at < ? ORDER BY r.id DESC LIMIT 1""",
                 (job_id, (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(timespec="seconds"))).fetchone()
@@ -450,6 +482,14 @@ def claim_monitor_run(job_id, due_only=False):
             row = connection.execute(f"SELECT * FROM fare_monitor_jobs WHERE {clause}{lock}", params).fetchone()
             if not row:
                 return None
+            daily_limit = monitor_daily_budget_limit()
+            day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+            daily_usage = connection.execute("""SELECT COALESCE(SUM(CASE
+                WHEN status='running' OR accounting_status='upper_bound' THEN serpapi_budget
+                ELSE serpapi_calls END),0) AS used
+                FROM fare_monitor_runs WHERE started_at>=? OR finished_at>=? OR status='running'""", (day_start, day_start)).fetchone()["used"]
+            if daily_limit <= 0 or int(daily_usage) + int(row["api_budget"]) > daily_limit:
+                return None
             cursor = connection.execute("UPDATE fare_monitor_jobs SET running=1 WHERE id=? AND running=0", (job_id,))
             if cursor.rowcount != 1:
                 return None
@@ -460,10 +500,14 @@ def claim_monitor_run(job_id, due_only=False):
         connection.close()
 
 
-def finish_monitor_run(job, status, report=None, error=None, next_run_at=None):
+def finish_monitor_run(job, status, report=None, error=None, next_run_at=None, accounting_status="exact"):
     initialize_database()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     report = report or {}
+    if accounting_status == "upper_bound":
+        report["serpapi_budget"] = int(job.get("api_budget", 0))
+        report["serpapi_calls"] = int(job.get("api_budget", 0))
+        report["accounting_status"] = "upper_bound"
     if status == "succeeded":
         from flight_search.monitoring import classify_fare_changes, normalize_run_itineraries
         current = normalize_run_itineraries(report, job)
@@ -509,10 +553,10 @@ def finish_monitor_run(job, status, report=None, error=None, next_run_at=None):
             report["fare_change_summary"] = {kind: sum(change["type"] == kind for change in changes)
                 for kind in ("new_itinerary", "fare_decreased", "fare_increased", "no_material_change", "not_observed", "currency_mismatch")}
             report["fare_comparison_status"] = "compared" if status == "succeeded" else "unavailable: search did not complete successfully"
-            report["api_calls_remaining"] = max(0, int(report.get("serpapi_budget", job["api_budget"])) - int(report.get("serpapi_calls", 0)))
+            report["api_calls_remaining"] = 0 if accounting_status == "upper_bound" else max(0, int(report.get("serpapi_budget", job["api_budget"])) - int(report.get("serpapi_calls", 0)))
             coverage = {key: report.get(key) for key in ("valid_date_pairs", "covered_date_pairs", "combined_searches", "planned_usage", "serpapi_budget", "api_calls_remaining", "fare_change_summary")}
-            connection.execute("UPDATE fare_monitor_runs SET status=?,finished_at=?,serpapi_calls=?,coverage_json=?,result_json=?,error=? WHERE id=?",
-                (status, now, report.get("serpapi_calls", 0), json.dumps(coverage), json.dumps(report, default=str), error, job["run_id"]))
+            connection.execute("UPDATE fare_monitor_runs SET status=?,finished_at=?,serpapi_calls=?,accounting_status=?,coverage_json=?,result_json=?,error=? WHERE id=?",
+                (status, now, report.get("serpapi_calls", 0), accounting_status, json.dumps(coverage), json.dumps(report, default=str), error, job["run_id"]))
             connection.execute("UPDATE fare_monitor_jobs SET running=0,last_run_at=?,next_run_at=?,rotation_cursor=rotation_cursor+1 WHERE id=?",
                                (now, next_run_at, job["id"]))
     finally:
