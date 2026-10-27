@@ -2,7 +2,7 @@
 
 Run only with TEST_POSTGRES_URL pointing to a database whose name contains
 "test" or "disposable". The suite refuses DATABASE_URL fallback and checks
-the server identity before dropping the isolated public schema.
+the server identity and public table allowlist before clearing app test data.
 """
 import os
 import re
@@ -41,8 +41,15 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
                 raise RuntimeError("Refusing PostgreSQL integration tests: server database name is not disposable.")
             identity.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'")
             tables = [row[0] for row in identity.fetchall()]
+            from flight_search.database.migrate_sqlite_to_postgres import TABLES
+            known_app_tables = set(TABLES)
+            unexpected_tables = set(tables) - known_app_tables
+            if unexpected_tables:
+                raise RuntimeError("Refusing PostgreSQL integration tests: public schema contains unexpected tables.")
             if tables:
-                raise RuntimeError("Refusing PostgreSQL integration tests: public schema is not empty.")
+                quoted = ",".join('"' + name.replace('"', '""') + '"' for name in tables)
+                identity.execute(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE")
+                connection.commit()
             connection.close()
         except Exception as exc:
             try:
@@ -68,9 +75,34 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def create_monitor_job(self, name="Disposable integration"):
+        return db.save_monitor_job({
+            "name": name, "enabled": 1, "start_date": "2027-01-01", "end_date": "2027-01-20",
+            "nights": 5, "leg1_origin": "HYD", "leg1_destination": "MOW",
+            "leg2_origin": "MOW", "leg2_destination": "HYD", "interval_days": 2,
+            "timezone": "Asia/Kolkata", "api_budget": 2, "notify_telegram": 0,
+            "next_run_at": None,
+        })
+
     @classmethod
     def tearDownClass(cls):
-        cls._db_url_patch.stop()
+        try:
+            connection = db.get_connection()
+            try:
+                tables = [row[0] for row in connection.execute(
+                    "SELECT tablename FROM pg_tables WHERE schemaname='public'").fetchall()]
+                from flight_search.database.migrate_sqlite_to_postgres import TABLES
+                unexpected = set(tables) - set(TABLES)
+                if unexpected:
+                    raise RuntimeError("Refusing integration cleanup: unexpected public tables were found.")
+                if tables:
+                    quoted = ",".join('"' + name.replace('"', '""') + '"' for name in tables)
+                    connection.execute(f"TRUNCATE TABLE {quoted} RESTART IDENTITY CASCADE")
+                    connection.commit()
+            finally:
+                connection.close()
+        finally:
+            cls._db_url_patch.stop()
 
     def test_schema_search_multi_leg_and_monitor_lifecycle(self):
         run_id = db.create_search_run("HYD", "MOW", "2027-01-01", "2027-02-01", 5, 6, 4)
@@ -86,25 +118,20 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
                  "serpapi_budget": 0, "serpapi_calls": 0, "budget_limited": False, "statistics": {}},
             fares=[], outcomes=[], comparisons=[])
         self.assertGreater(multi_id, 0)
-        job = db.save_monitor_job({"name": "Disposable integration", "enabled": 1, "start_date": "2027-01-01",
-            "end_date": "2027-01-20", "nights": 5, "leg1_origin": "HYD", "leg1_destination": "MOW",
-            "leg2_origin": "MOW", "leg2_destination": "HYD", "interval_days": 2, "timezone": "Asia/Kolkata",
-            "api_budget": 2, "notify_telegram": 0, "next_run_at": None})
+        job = self.create_monitor_job()
         claimed = db.claim_monitor_run(job["id"])
         self.assertIsNotNone(claimed)
         db.finish_monitor_run(claimed, "failed", {"serpapi_calls": 0, "serpapi_budget": 2}, error="mock failure")
         self.assertEqual("failed", db.list_monitor_runs(job["id"])[0]["status"])
 
     def test_concurrent_claiming_only_creates_one_run(self):
-        jobs = db.list_monitor_jobs()
-        job = next(job for job in jobs if job["name"] == "Disposable integration")
+        job = self.create_monitor_job()
         with ThreadPoolExecutor(max_workers=8) as pool:
             claims = list(pool.map(lambda _i: db.claim_monitor_run(job["id"]), range(8)))
         self.assertEqual(1, sum(claim is not None for claim in claims))
 
     def test_interrupted_run_recovery_charges_upper_bound_and_holds_retry(self):
-        jobs = db.list_monitor_jobs()
-        job = next(job for job in jobs if job["name"] == "Disposable integration")
+        job = self.create_monitor_job()
         claim = db.claim_monitor_run(job["id"])
         connection = db.get_connection()
         try:
