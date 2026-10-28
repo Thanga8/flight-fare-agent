@@ -32,7 +32,17 @@ Start the local UI (initializes/checks the configured database first):
 powershell -ExecutionPolicy Bypass -File .\run-local.ps1
 ```
 
-Open `http://127.0.0.1:5000`. Stop with **Ctrl+C** in that same PowerShell window. The app binds only to loopback; do not change the host to `0.0.0.0`. The public, non-secret check is `http://127.0.0.1:5000/healthz`; the authenticated monitor readiness page also reports database and configuration presence. `flask --app webapp db-ready` checks/initializes the database without searching fares.
+Open `http://127.0.0.1:5000`. Stop with **Ctrl+C** in that same PowerShell window. The app binds only to loopback; do not change the host to `0.0.0.0`. The public, non-secret check is `http://127.0.0.1:5000/healthz`; the authenticated monitor readiness page also reports database and configuration presence. `.\.venv\Scripts\python.exe -m flask --app webapp db-ready` checks/initializes the database without searching fares.
+
+For offline/mock validation, keep both database selectors empty and run the regression modules below. They use temporary SQLite databases and mocked provider responses; they do not perform paid fare searches or send notifications:
+
+```powershell
+$env:DATABASE_URL = ""
+$env:TEST_POSTGRES_URL = ""
+.\.venv\Scripts\python.exe -m unittest test_database_portability test_workflow_safety test_fare_monitor test_fare_change_detection test_provider_security test_multi_leg_persistence test_fare_history test_search_planner test_multi_leg test_scoring test_results test_historical_prioritization test_search_insights test_date_sampling test_webapp test_postgres_target_safety -q
+```
+
+The PostgreSQL integration suite is separate and destructive only to the explicitly named local disposable test database. It requires `TEST_POSTGRES_URL` to point to loopback and a database whose name starts with `test` or `disposable`; `DATABASE_URL` must remain blank. Do not point it at production or a shared environment.
 
 ## Supabase project and connection
 
@@ -40,7 +50,7 @@ Open `http://127.0.0.1:5000`. Stop with **Ctrl+C** in that same PowerShell windo
 2. In the project dashboard, select **Connect** and copy a connection string; do not construct hostnames or usernames yourself.
 3. For this app's short-lived connections, use the shared **Transaction pooler** string from that dialog when available. It is IPv4 compatible and appropriate for short-lived clients. The current driver does not enable prepared statements. Use **Session pooler** if you need session semantics, or direct connection only when your network supports the project's IP family; follow Supabase's connection guidance. Supabase can change plan limits and endpoint details.
 4. Store the copied string in local `.env` as `DATABASE_URL=...`. Percent-encode reserved characters in the password if required by the copied URI. The same target string is later stored as a GitHub Actions secret, never in the repository.
-5. With `.venv` active/installed, check it using `flask --app webapp db-ready`. This initializes the additive application schema and confirms connectivity; it does not search flights.
+5. With the dependencies installed, check it using `.\.venv\Scripts\python.exe -m flask --app webapp db-ready` from PowerShell. This initializes the additive application schema and confirms connectivity; it does not search flights. Using the interpreter path avoids requiring the virtual environment's `flask` command to be on `PATH`.
 
 Supabase documents that its Free plan currently includes a 500 MB database allowance and may pause low-activity free projects after a week. Confirm current limits in the account dashboard before relying on it; no free tier is guaranteed permanent. Keep an independent backup/export because a free project is not a backup strategy.
 
@@ -68,11 +78,11 @@ Review the table counts and confirm that the target is the intended empty projec
 
 The tool requires the original `search_runs` and `flight_results` tables and accepts the monitoring and multi-leg tables as optional for older databases; missing optional tables are copied as empty. Present source tables are copied with their IDs. It checks source foreign keys, refuses a target containing rows in any public table, imports parent and child rows in one transaction, preserves SQLite `AUTOINCREMENT` high-water marks (including deleted IDs), and verifies per-table counts and key relationships. The source opens read-only and is never modified. A failed copy rolls back data rows; schema initialization may remain on the empty target, which is still safe for retry. Do not rerun after a successful migration: the now non-empty target is deliberately refused.
 
-When counts and integrity pass, keep `DATABASE_URL` set and run `flask --app webapp db-ready`, then start the UI and inspect search history, fare insights, monitor jobs, runs, and observations. The target must be empty before migration; there is no merge or overwrite option.
+When counts and integrity pass, keep `DATABASE_URL` set and run `.\.venv\Scripts\python.exe -m flask --app webapp db-ready`, then start the UI and inspect search history, fare insights, monitor jobs, runs, and observations. The target must be empty before migration; there is no merge or overwrite option.
 
 ## GitHub Actions configuration and safety gate
 
-The workflow is `.github/workflows/fare-monitor.yml`. Once it is on the repository default branch, its six-hour schedule is eligible to run. It uses `ubuntu-latest`, checks out the workflow revision (no fixed feature branch), serializes schedule/dispatch runs, has a 15-minute timeout, performs a DB readiness check, and then runs the same Flask CLI/database code as the local app. The top-level job condition requires repository variable `FARE_MONITOR_ENABLED` to equal the literal `true`; missing or false skips both scheduled and manually dispatched runs. There is no bypass input. The Python CLI independently fails closed unless the environment gate is true.
+The workflow is `.github/workflows/fare-monitor.yml`. Once it is on the repository default branch, its six-hour schedule is eligible to run. It uses `ubuntu-latest`, checks out the workflow revision (no fixed feature branch), serializes schedule/dispatch runs, has a 30-minute timeout, performs a DB readiness check, and then runs the same Flask CLI/database code as the local app. The top-level job condition requires repository variable `FARE_MONITOR_ENABLED` to equal the literal `true`; missing or false skips both scheduled and manually dispatched workflow runs. There is no workflow bypass input. The Python CLI independently fails closed unless the environment gate is true. This gate applies to automatic CLI/GitHub runs; an authenticated owner can still start a paid manual check from the local dashboard, and `/search` is independent of the monitoring gate.
 
 In repository **Settings → Secrets and variables → Actions**, add these **secrets**:
 
@@ -103,14 +113,14 @@ No account, project, secret, deployment, migration, live search, or notification
 2. Create a Supabase project and choose a supported connection string from **Connect**.
 3. Back up `data/flights.db`, set local `DATABASE_URL` in ignored `.env`, and run the migration `--dry-run`.
 4. Confirm the target is correct and empty; run the migration and compare the reported counts.
-5. Run `flask --app webapp db-ready`, start the local UI, and verify stored history and monitor data.
+5. Run `.\.venv\Scripts\python.exe -m flask --app webapp db-ready`, start the local UI, and verify stored history and monitor data.
 6. After the workflow change is on `main`, add the GitHub Actions secrets above and set `FARE_MONITOR_ENABLED=false`.
 7. Confirm no credentials are tracked (`git status` and `git check-ignore .env`); leave monitoring disabled until you choose an activation window.
 8. Check the Supabase, GitHub, and SerpApi account usage/limits before enabling scheduled jobs.
 
 ### Safe activation procedure
 
-When ready: confirm `DATABASE_URL` and `SERPAPI_API_KEY` secrets, retain `FARE_MONITOR_ENABLED=false` while verifying the workflow appears on the default branch, then set the repository variable to `true`. In the authenticated local dashboard, enable only the intended paused job(s); verify each saved budget is within the 50-call per-run ceiling (new jobs default to 6). Use `workflow_dispatch` only after those checks. Inspect the Actions logs and monitor run status, then keep the gate true only while scheduled checks are desired. To stop all scheduled searches, set the variable back to `false`; separately disable any manual dashboard job. This gate does not protect against API usage from the local `/search` page.
+When ready: confirm `DATABASE_URL` and `SERPAPI_API_KEY` secrets, retain `FARE_MONITOR_ENABLED=false` while verifying the workflow appears on the default branch, then set the repository variable to `true`. In the authenticated local dashboard, enable only the intended paused job(s); verify each saved budget is within the 50-call per-run ceiling (new jobs default to 6). Use `workflow_dispatch` only after those checks. Inspect the Actions logs and monitor run status, then keep the gate true only while scheduled checks are desired. To stop all scheduled searches, set the variable back to `false`; separately disable any manual dashboard job. The gate does not block the owner-only **Run check now** action or API usage from the local `/search` page.
 
 ## Verification limits
 

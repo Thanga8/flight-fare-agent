@@ -81,6 +81,8 @@ class FareMonitorTests(unittest.TestCase):
         response = self.client.get("/monitor")
         self.assertEqual(200, response.status_code)
         self.assertIn(b"Configuration readiness", response.data)
+        self.assertIn(b"controls automatic CLI/GitHub runs only", response.data)
+        self.assertIn(b"paid search with", response.data)
         self.assertIn(b"Recent fare observations", response.data)
 
     def test_default_two_day_paused_schedule_timezone_and_persistent_edit(self):

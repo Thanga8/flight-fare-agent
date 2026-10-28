@@ -666,3 +666,30 @@ Cloud-Based Alerts
 ```
 
 This order may change if new information materially changes the project's priorities.
+
+---
+
+# Decision 026 — Keep VR Train Integration Behind the Official Access Gate
+
+## Decision
+
+Do not integrate the experimental Finnish VR train fare branch into the flight
+search application until the user has confirmed access to a documented VR API
+product and its applicable terms.
+
+## Rationale
+
+The separate `feature/vr-train-fares` branch calls VR's website tRPC journey
+endpoint rather than an API documented for application use. VR's official
+[developer onboarding guide](https://developer.apim.vrpublic.fi/getting-started)
+requires a developer account that VR manually approves, followed by product
+subscription and keys; some products also require a token. The [VR API terms](https://developer.apim.vrpublic.fi/terms-and-conditions) describe access
+keys as purpose-bound by the applicable agreement. A working website endpoint
+does not establish application access permission or a stable API contract.
+
+## Consequence
+
+Keep the branch isolated. Reassess only after the user obtains approval and
+identifies the documented product and permitted use. This rail research is
+separate from Phase 6's Russia-compatible flight-provider research and does
+not affect the current flight-search flow.

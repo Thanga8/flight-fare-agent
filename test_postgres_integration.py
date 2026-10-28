@@ -6,11 +6,13 @@ the server identity and public table allowlist before clearing app test data.
 """
 import os
 import re
+import ipaddress
 import sqlite3
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 from unittest.mock import patch
 
 from flight_search.database import db
@@ -20,8 +22,16 @@ def _test_url():
     url = os.getenv("TEST_POSTGRES_URL", "").strip()
     if not url:
         raise unittest.SkipTest("Set TEST_POSTGRES_URL to an explicitly disposable PostgreSQL database.")
-    if not re.search(r"(?:/|\b)(?:test|disposable)[\w-]*(?:\?|$)", url, re.IGNORECASE):
-        raise unittest.SkipTest("TEST_POSTGRES_URL database name must include 'test' or 'disposable'.")
+    parsed = urlparse(url)
+    try:
+        host_is_loopback = bool(parsed.hostname) and ipaddress.ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        host_is_loopback = parsed.hostname == "localhost"
+    database_name = unquote(parsed.path.lstrip("/"))
+    if not host_is_loopback:
+        raise unittest.SkipTest("TEST_POSTGRES_URL must connect through localhost or a loopback IP.")
+    if not re.match(r"^(?:test|disposable)[\w-]*$", database_name, re.IGNORECASE):
+        raise unittest.SkipTest("TEST_POSTGRES_URL database name must start with 'test' or 'disposable'.")
     return url
 
 
@@ -37,7 +47,7 @@ class PostgreSQLIntegrationTests(unittest.TestCase):
             identity = connection.cursor()
             identity.execute("SELECT current_database(), current_user, inet_server_addr()::text")
             dbname, _user, _address = identity.fetchone()
-            if not re.search(r"(?:test|disposable)", dbname, re.IGNORECASE):
+            if not re.match(r"^(?:test|disposable)[\w-]*$", dbname, re.IGNORECASE):
                 raise RuntimeError("Refusing PostgreSQL integration tests: server database name is not disposable.")
             identity.execute("SELECT tablename FROM pg_tables WHERE schemaname='public'")
             tables = [row[0] for row in identity.fetchall()]

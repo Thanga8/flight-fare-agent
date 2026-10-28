@@ -6,7 +6,7 @@ The app now supports both local SQLite and shared PostgreSQL. `DATABASE_URL` tak
 
 ## Safety and budgets
 
-- Monitoring is disabled unless `FARE_MONITOR_ENABLED` is literally `true` in the GitHub repository variable and the workflow's job-level gate passes.
+- Scheduled monitoring is disabled unless `FARE_MONITOR_ENABLED` is literally `true` in the GitHub repository variable and the workflow's job-level gate passes. This gate does not disable the owner-only dashboard's explicit **Run check now** action; that action can make a paid search while the schedule gate is false. The regular web search is independent too.
 - `workflow_dispatch` has no bypass input. The CLI also checks the environment gate.
 - Workflow runs are serialized and not cancelled while in progress. The 30-minute timeout covers 50 sequential 30-second requests plus five minutes of setup and database/notification overhead.
 - PostgreSQL monitor claims lock the job row with `FOR UPDATE`; SQLite uses `BEGIN IMMEDIATE`.
